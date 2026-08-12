@@ -17,7 +17,6 @@ python/binaml/*.so
 python/binaml/*.dylib
 python/binaml/*.pyd
 *.dSYM/
-profile.json.gz
 
 .claude/
 

@@ -7,7 +7,6 @@ license.workspace = true
 repository.workspace = true
 homepage = "https://github.com/binaml/binaml"
 readme = "README.md"
-exclude = ["profile.json.gz"]
 keywords = ["boolean-functions", "machine-learning", "online-learning", "streaming"]
 categories = ["algorithms", "science"]
 
