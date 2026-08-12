@@ -1,0 +1,20 @@
+[package]
+name = "binaml-python"
+version.workspace = true
+edition.workspace = true
+description = "Python bindings for binaml-core"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "binaml_python"
+crate-type = ["cdylib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+binaml-core = { path = "../../crates/binaml-core" }
+numpy = "0.23"
+pyo3 = "0.23"

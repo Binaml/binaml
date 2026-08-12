@@ -1,0 +1,100 @@
+name: Release check
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - pyproject.toml
+      - CHANGELOG.md
+      - CITATION.cff
+      - crates/**
+      - bindings/**
+      - python/**
+      - .github/workflows/release-check.yml
+      - .github/workflows/release.yml
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v6
+      - name: Check release metadata
+        shell: bash
+        run: |
+          version=$(awk -F '"' '/^version =/ { print $2; exit }' Cargo.toml)
+          grep -F "version: \"$version\"" CITATION.cff
+          grep -F "## [$version]" CHANGELOG.md
+      - run: cargo publish -p binaml-core --dry-run --locked
+      - run: uv build --sdist --out-dir dist
+      - name: Install and exercise sdist
+        run: |
+          python -c "import glob, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', glob.glob('dist/*.tar.gz')[0]])"
+      - name: Test installed sdist outside checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*
+          if-no-files-found: error
+
+  wheels:
+    name: ${{ matrix.platform.name }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+        platform:
+          - name: linux-x86_64
+            runner: ubuntu-latest
+            target: x86_64
+          - name: macos-universal2
+            runner: macos-latest
+            target: universal2-apple-darwin
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Linux wheel
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          manylinux: auto
+          args: --release --out dist --interpreter python
+      - name: Build macOS or Windows wheel
+        if: runner.os != 'Linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter python
+      - name: Install wheel
+        run: |
+          python -c "import glob, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', glob.glob('dist/*.whl')[0]])"
+      - name: Test installed wheel outside checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python }}
+          path: dist/*
+          if-no-files-found: error

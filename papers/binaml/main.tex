@@ -1,0 +1,436 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\ExplSyntaxOn
+\ior_new:N \g_binaml_metadata_ior
+\tl_new:N \g_binaml_title_tl
+\seq_new:N \g_binaml_authors_seq
+\seq_new:N \g_binaml_author_emails_seq
+\tl_new:N \g_binaml_date_tl
+\tl_new:N \g_binaml_status_tl
+\cs_new_protected:Npn \binaml_read_metadata:
+  {
+    \ior_open:Nn \g_binaml_metadata_ior { metadata.yaml }
+    \ior_str_map_inline:Nn \g_binaml_metadata_ior
+      {
+        \regex_match:nnTF { \A title: } { ##1 }
+          {
+            \tl_gset:Nn \g_binaml_title_tl { ##1 }
+            \regex_replace_once:nnN
+              { \A title: \s* " } { } \g_binaml_title_tl
+            \regex_replace_once:nnN
+              { " \s* \Z } { } \g_binaml_title_tl
+          }
+          {
+            \regex_match:nnTF { \A \s* email: } { ##1 }
+              {
+                \tl_set:Nn \l_tmpa_tl { ##1 }
+                \regex_replace_once:nnN
+                  { \A \s* email: \s* " } { } \l_tmpa_tl
+                \regex_replace_once:nnN
+                  { " \s* \Z } { } \l_tmpa_tl
+                \seq_gput_right:NV \g_binaml_author_emails_seq \l_tmpa_tl
+              }
+              {
+                \regex_match:nnTF { \A date: } { ##1 }
+                  {
+                    \tl_gset:Nn \g_binaml_date_tl { ##1 }
+                    \regex_replace_once:nnN
+                      { \A date: \s* } { } \g_binaml_date_tl
+                  }
+                  {
+                    \regex_match:nnTF { \A status: } { ##1 }
+                      {
+                        \tl_gset:Nn \g_binaml_status_tl { ##1 }
+                        \regex_replace_once:nnN
+                          { \A status: \s* } { } \g_binaml_status_tl
+                      }
+                      {
+                        \regex_match:nnT { \A \s* - \s* name: } { ##1 }
+                          {
+                            \tl_set:Nn \l_tmpa_tl { ##1 }
+                            \regex_replace_once:nnN
+                              { \A \s* - \s* name: \s* } { } \l_tmpa_tl
+                            \seq_gput_right:NV \g_binaml_authors_seq \l_tmpa_tl
+                          }
+                      }
+                  }
+              }
+          }
+      }
+    \ior_close:N \g_binaml_metadata_ior
+  }
+\binaml_read_metadata:
+\NewDocumentCommand \BinamlTitle { } { \tl_use:N \g_binaml_title_tl }
+\NewDocumentCommand \BinamlAuthors { }
+  {
+    \seq_map_indexed_inline:Nn \g_binaml_authors_seq
+      {
+        ##2 \\
+        \href
+          {mailto:\seq_item:Nn \g_binaml_author_emails_seq { ##1 }}
+          {\seq_item:Nn \g_binaml_author_emails_seq { ##1 }}
+        \int_compare:nNnT { ##1 } < { \seq_count:N \g_binaml_authors_seq }
+          { \and }
+      }
+  }
+\NewDocumentCommand \BinamlDate { }
+  {
+    \tl_use:N \g_binaml_date_tl
+    \str_if_eq:eeT { \tl_use:N \g_binaml_status_tl } { draft }
+      { \space (Draft) }
+  }
+\ExplSyntaxOff
+\title{\BinamlTitle}
+\author{\BinamlAuthors}
+\date{\BinamlDate}
+\begin{document}
+\maketitle
+\begin{abstract}
+Binaml focuses on continual learning models over streams of binary features
+subject to data drift.  Binary features provide a task-agnostic representation
+and enable models optimized for memory, latency, and energy efficiency.  This
+paper specifies Binaml's current regression model, \texttt{BRegressor}, as an
+initial task-specific instantiation.  It adapts online rather than relying on a
+stationary train/serve assumption and learns compact compositional
+representations from residual feedback.  The model is environment-agnostic: it
+does not depend on how the stream is produced.  This paper specifies the
+current regression model and reports reproducible prequential comparisons on
+versioned synthetic streams.
+\end{abstract}
+
+\section{Notation}
+\begin{description}
+  \item[$d,x_t,y_t$] Input width, binary input, and scalar regression target.
+  \item[$\hat y_t,e_t,s_t$] Prediction, residual, and residual-sign label.
+  \item[$b,w_r,\eta,\lambda$] Intercept, coefficient of feature id $r$, learning
+  rate, and $\ell_2$ decay.
+  \item[$r=(\ell,j)$] Feature id with store layer $\ell$ and index $j$.
+  \item[$\varphi_r,\psi_r,\mathcal L$] Boolean value, centered value, and live
+  feature set for feature id $r$.
+  \item[$T\in\{0,\ldots,15\}$] Four-bit truth table of an arity-2 composed
+  feature.
+  \item[$r_0,r_1$] Ordered input feature ids of a composed feature.
+  \item[$B,S,n,K$] Replay-batch size, SGD steps per observation, feature-batch
+  index, and parent top-$K$ width.
+  \item[$C_{\ell},V_{\ell},L$] Live capacity per learned layer, candidate
+  capacity per layer, and maximum learned-layer depth.
+  \item[$\sigma(r),\tilde\sigma(r)$] Match score and propagated pruning score.
+\end{description}
+
+\section{Model}
+At time $t$, the model receives $x_t\in\{0,1\}^d$ and later observes a finite
+scalar $y_t$.  If useful signal is sparse weighted boolean structure over bits,
+a linear head over learned boolean indicators is a direct hypothesis class:
+continuous amplitudes, discrete features, and an inspectable composition.
+Let $\mathcal L$ be the current set of live feature ids.
+The prediction is
+\[
+\hat y_t
+=
+b
++
+\sum_{r\in\mathcal L}
+w_r\,\psi_r(x_t),
+\]
+where $b\in\mathbb R$, each $w_r\in\mathbb R$, and each
+$\varphi_r(x_t)\in\{0,1\}$ is centered before entering the linear head:
+\[
+\psi_r(x_t)=2\varphi_r(x_t)-1\in\{-1,1\}.
+\]
+
+\paragraph{Layer zero.}
+Input coordinates have feature ids
+$r=(0,j)$ for $j\in\{0,\ldots,d-1\}$, with
+\[
+\varphi_{(0,j)}(x)=x_j.
+\]
+Their initial coefficients are zero.
+
+\paragraph{Composed features.}
+Composition starts from the most basic nontrivial boolean learning unit:
+two-input tables.  Combining them yields richer features without beginning
+from high-arity search.  A composed feature combines two input features
+$(r_0,r_1)$ using a four-bit truth table $T\in\{0,\ldots,15\}$.
+
+\section{Feature representation and storage}
+Depth is the natural complexity axis for feature composition: it bounds how
+far candidates look, keeps evaluation a DAG walk, and makes capacity control
+per depth band.  The store layer of a composed feature is
+\[
+\ell(r)=1+\max\bigl(\ell(r_0),\ell(r_1)\bigr).
+\]
+Layer zero holds the $d$ source features.  Each learned layer
+$\ell\geq 1$ maintains two collections:
+\begin{description}
+  \item[Live] Optionally occupied slots of composed features.  Indices are
+  stable; pruned slots become tombstones and are no longer live feature ids.
+  \item[Candidates] Candidate features trained on the current batch and not yet
+  admitted to the live set.
+\end{description}
+A candidate insert requires ordered distinct inputs $r_0<r_1$, valid live or
+source parents, and the correct derived layer.  The store permits multiple
+features with the same parent pair, allowing truth tables learned on different
+batches to coexist.  Newly promoted live coefficients start at zero.  After
+promote or prune, coefficients of dead feature ids are dropped and missing
+live feature ids receive weight zero.
+
+\subsection{Runtime layout}
+The implementation separates stable feature identity from compact evaluation.
+Each id is the pair \texttt{FeatureId(layer, index)}.  Source scores occupy one
+contiguous vector.  Learned layers occupy a vector of layer records; each
+record has a live vector of optional feature records and a candidate vector.
+An absent live entry is a tombstone, so pruning does not renumber an id that a
+later feature may reference.  A feature record stores two parent ids, one
+four-bit \texttt{u8} truth table, and one \texttt{u8} match score.  The eight
+\texttt{u8} counters used to learn a table cover every
+$(u,v,s)\in\{0,1\}^3$ combination, which limits the feature-learning batch
+size to 255.
+
+Before evaluation, the live store is flattened in layer order into a replay
+layout: one vector of feature ids and one same-length vector of nodes.  A source
+node stores its input coordinate; a composed node stores the two already
+evaluated node positions and its truth table.  Thus each input is evaluated in
+one forward topological pass.  The replay cache is a bounded deque of these
+\texttt{u8} activation rows, alongside deques of the original binary inputs
+and targets.  Coefficients are kept separately in a map from feature id to
+\texttt{f64}; after each structural update, tombstoned weights are removed and
+new live ids receive weight zero.
+
+\begin{center}
+\scriptsize
+\begin{tabular}{@{}p{0.20\textwidth}p{0.47\textwidth}p{0.25\textwidth}@{}}
+\hline
+\textbf{Type} & \textbf{Fields or representation} & \textbf{Role} \\
+\hline
+\texttt{FeatureId} & \texttt{\{layer: usize, index: usize\}} & stable source or learned-feature identity \\
+\texttt{Feature} & \texttt{\{inputs: [FeatureId; 2], truth\_table: u8, score: u8\}} & composed boolean feature and pruning score \\
+\texttt{FeatureLayer} & \texttt{\{live: Vec<Option<Feature>>, candidates: Vec<Feature>\}} & one learned depth band; empty live slots are tombstones \\
+\texttt{FeatureStore} & \texttt{\{source\_scores: Vec<u8>, layers: Vec<FeatureLayer>\}} & owns all source, live, and candidate features \\
+\texttt{FeatureLearningConfig} & \texttt{\{batch\_size, parent\_top\_k, features\_per\_layer, candidate\_capacity, max\_layers\}} & feature-search limits and parent-selection width \\
+\texttt{FeatureLearner} & \texttt{\{config, store, has\_previous\_batch: bool\}} & scores, promotes, prunes, and generates features \\
+\texttt{ReplayLayout} & \texttt{\{references: Vec<FeatureId>, nodes: Vec<FeatureNode>\}} & compact layer-ordered evaluation plan \\
+\texttt{FeatureNode} & \texttt{Source(usize)} or \texttt{Composed\{first: usize, second: usize, truth\_table: u8\}} & source coordinate or compiled composed operation \\
+\texttt{ReplayCache} & \texttt{\{layout: ReplayLayout, rows: VecDeque<Vec<u8>>\}} & bounded cached activation rows \\
+\texttt{BRegressor} & learner, coefficient \texttt{HashMap<FeatureId, f64>}, intercept \texttt{f64}, replay input/target deques, cache, count & online model state \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Online linear-head updates}
+Composed-feature identity is discrete; coefficients are continuous, so the two
+are updated separately.  The model retains the most recent $B$ observations.
+For each new observation, it performs $S$ full-batch squared-error gradient
+steps over that replay window.  For one such step, let
+$e_i=y_i-\hat y_i$ be each pre-step residual and $\mathcal R$ be the current
+replay window.  With learning rate $\eta>0$ and decay $\lambda\geq 0$, apply
+the averaged data gradient with multiplicative $\ell_2$ shrinkage:
+\begin{align*}
+w_r &\leftarrow (1-\eta\lambda)\,w_r
+&&\text{for all live }r,\\
+b &\leftarrow b+\eta\frac{1}{|\mathcal R|}\sum_{i\in\mathcal R}e_i,\\
+w_r &\leftarrow w_r+\eta\frac{1}{|\mathcal R|}
+\sum_{i\in\mathcal R}e_i\psi_r(x_i).
+\end{align*}
+There is no gradient through boolean structure: SGD tracks residual amplitude
+at the batch level, while structure search runs when enough residual-sign
+evidence exists.  The residual signs
+\[
+s_i=\mathbf{1}\{e_i\geq 0\}
+\]
+are computed before the associated replay updates.  After every $B$ new
+observations, the ring buffer has been completely refreshed; the learner
+consumes that non-overlapping window for feature learning.
+
+\section{Residual-sign supervision and batching}
+Feature learning targets residual signs, not $y_t$ itself.  Residual signs are
+a binary supervision bit for the discrete learner, while the linear head
+absorbs magnitude---simple parts combined, not one joint high-complexity
+update.  Exact truth-table counting needs a bounded window; batching amortizes
+candidate search and gives a natural train/hold-out split across successive
+windows.  Batch $n$ is
+\[
+\mathcal B_n
+=
+\bigl\{(x_{t},s_{t})\bigr\}_{t\in I_n},
+\qquad |I_n|=B,
+\]
+where $I_n$ is the contiguous observation window that completely refreshed the
+ring buffer.
+Processing $\mathcal B_n$ has three phases when a previous batch exists:
+\begin{enumerate}
+  \item Score every source, live feature, and candidate on
+  $\mathcal B_n$ by match count against residual signs.
+  \item Promote every candidate into live, then prune each learned
+  layer to capacity $C_{\ell}$.
+  \item Learn new candidates on $\mathcal B_n$.
+\end{enumerate}
+On the first batch only the candidate-learning phase runs.  Candidates trained
+on $\mathcal B_n$ therefore receive their first scores on $\mathcal B_{n+1}$
+before promotion: a one-batch hold-out across successive residual-sign
+windows.
+
+\paragraph{Match score.}
+For a boolean stream $z_{1:B}$ and residual signs $s_{1:B}$,
+\[
+\sigma=\sum_{i=1}^{B}\mathbf{1}\{z_i=s_i\}.
+\]
+Sources use their coordinate columns; composed features use their evaluated
+bitstreams.
+
+\section{Truth-table learning}
+Given two parent bitstreams $u_{1:B}$, $v_{1:B}$ and residual signs
+$s_{1:B}$, the learner returns the Hamming-error-minimizing four-bit table.
+Its state is a fixed array of eight \texttt{u8} counters, one for each
+combination of the two parent values and residual sign.  The learned result is
+a four-bit truth table represented by one \texttt{u8}.  The counters record
+the frequencies needed to select each table output by majority, with ties
+resolving to zero.  As one counter may receive every observation, the
+\texttt{u8} counters bound the admissible batch size to $B\leq255$.
+
+\section{Candidate feature generation}
+For each layer $\ell=1,\ldots,L$, while candidate capacity $V_{\ell}$ remains:
+\begin{enumerate}
+  \item Let $P$ be the top-$K$ live feature ids in layer $\ell-1$ by match
+  score, breaking ties by feature-id order.
+  \item Form every distinct pair $\{r_a,r_b\}\subset P$, written with
+  $r_0<r_1$.
+  \item For each pair, learn a truth table on the current batch and insert it
+  into candidates with initial score zero, stopping if candidate capacity is
+  reached.  A pair may produce a new candidate even when that pair already
+  appears in the layer.
+\end{enumerate}
+If $P$ has fewer than two feature ids, layer $\ell$ is skipped.
+Layer depth never exceeds $L$.
+
+\section{Feature promotion and pruning}
+After scoring on the following batch, every candidate at each learned layer is
+appended to that layer's live list.  A parent can look weak alone yet be
+required by useful children, so pruning uses max-with-descendants scores.
+If a layer then exceeds capacity $C_{\ell}$, live feature ids are sorted by
+ascending propagated score
+\[
+\tilde\sigma(r)
+=
+\max\!\Bigl(
+\sigma(r),\;
+\max_{r'\in\mathrm{children}(r)}\tilde\sigma(r')
+\Bigr),
+\]
+where $\mathrm{children}(r)$ are live features that take $r$ as an input, and
+ties break by feature-id order.  The lowest
+$|\mathrm{live}|-C_{\ell}$ feature ids are tombstoned.  Tombstoning cascades
+to all dependents, so no live feature retains a dead parent.
+
+\section{Online learning procedure}
+\noindent\textbf{Configuration}
+\begin{description}
+  \item[\textbf{Linear}] Learning rate $\eta$, decay $\lambda$, and $S$ replay
+  SGD steps per observation.
+  \item[\textbf{Batch structure}] Batch size $B$, parent top-$K$ width $K$,
+  per-layer live capacity $C_{\ell}$, candidate capacity $V_{\ell}$,
+  and maximum depth $L$.
+\end{description}
+
+\noindent\textbf{Initialize:} empty learned layers, $b\leftarrow 0$,
+$w_{(0,j)}\leftarrow 0$ for all source indices, and an empty replay ring
+buffer.
+
+\noindent\textbf{For} each observation $(x_t,y_t)$:
+\begin{enumerate}
+  \item Validate the input width and finite target.  If the replay cache is
+  full, evict its oldest input, target, and activation row.
+  \item Evaluate live $\varphi_r(x_t)$ through the current replay layout,
+  predict $\hat y_t=b+\sum_{r\in\mathcal L}w_r\varphi_r(x_t)$, and append the
+  input, target, and activation row.
+  \item At every $B$th observation, compute residual signs from the current
+  replay rows before any coefficient update.
+  \item Apply $S$ full-batch linear updates over the current ring.
+  \item After a complete refresh, score the previous candidates, promote and
+  prune live features, then generate candidates from the current residual-sign
+  batch.  Synchronize coefficients and rebuild the replay layout and its cached
+  activation rows.
+\end{enumerate}
+
+\paragraph{Cost.}
+Prediction and cache insertion are linear in the number of live source and
+composed features.  Each linear step costs the replay-window size times that
+same live-feature count.  Structural work occurs once per complete refresh:
+candidate table learning scans each selected parent pair over $B$ rows, while
+pruning recursively scans later layers to preserve a useful descendant's
+parents.  The design trades occasional tombstones for stable ids and bounded
+live and candidate capacity per layer.
+
+\section{API and integration boundaries}
+The \texttt{binaml.models} package owns the online model and has no
+environment dependency: the goal is a generic model, decoupled from where the
+data comes from and how it was produced.  The public surface is
+\texttt{BRegressor}, which implements
+\texttt{predict(features)} and \texttt{observe(features, target)} for binary
+feature vectors of width $d$.  The prediction call may retain pairing state;
+\texttt{observe} must follow a preceding \texttt{predict}.  Feature learning
+is internal to \texttt{observe} once a batch fills.  Evaluation packages
+compose models with environments through predict-then-observe prequential
+evaluation.  Named benchmarks only compose these independent components.
+
+\section{Prequential evaluation protocol}
+For each emitted $(x_t,y_t)$, an evaluator first records the model
+prediction, then exposes the target through \texttt{observe}.  Mean squared
+error is computed from the recorded pre-update predictions.  Structure
+updates occur only after a full replay-ring refresh inside \texttt{observe};
+their residual signs are measured before the corresponding batch-gradient
+updates.
+Hyperparameters, implementation version, and the online protocol are required
+to interpret any reported trajectory.
+
+\section{Evaluation}
+The benchmark inputs and model configuration are versioned in this paper's
+benchmark directory.  The task uses 1,000 observations and seeds
+$\{0,1,2,3,4\}$ with 32 input bits,
+12 fixed target components, noise standard deviation $0.1$, and the same
+function, DAG, and target-scale settings.  Input, gate, and intercept
+distributions each resample independently with probability $0.01$.
+
+All models receive the scenario width.  The feature regressor uses learning
+rate $0.03$, $\ell_2$ decay $10^{-4}$, replay size 32, three full-batch steps,
+parent top-$K=8$, 32 live features per learned layer, candidate capacity 32,
+and depth two.  Every source and composed activation enters the linear head as
+$2\varphi_r(x)-1$, and candidate pairs are distinct members of the top-$K$
+previous layer only.  The linear baseline uses the same learning rate, decay,
+replay size, and step count, with uncentered binary inputs.  The MLP baseline uses
+replay size 32 and three \texttt{partial\_fit} passes; one 50-unit ReLU hidden
+layer; scikit-learn SGD with constant learning rate $0.003$, $\alpha=10^{-4}$,
+\texttt{power\_t}=0.5, shuffling enabled, random state zero, tolerance
+$10^{-4}$, zero momentum, no Nesterov momentum, and no early stopping.  Its
+remaining configured values are validation fraction $0.1$, $\beta_1=0.9$,
+$\beta_2=0.999$, $\epsilon=10^{-8}$, 10 no-change iterations, and disabled
+verbose output; the wrapper fixes one iteration and disables warm start.
+
+Tables report the mean $\pm$ standard error over five seeds.  MSE is the
+optimized loss; RMSE expresses the same error in target units.  Total time is
+the prequential predict-plus-observe time for a 1,000-sample trajectory.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrr}
+\hline
+\textbf{Model} & MSE & RMSE & total s \\
+\hline
+BRegressor (ours) & $\boldsymbol{0.681\pm0.015}$ & $\boldsymbol{0.825\pm0.009}$ & $0.454\pm0.007$ \\
+Linear SGD & $0.744\pm0.020$ & $0.862\pm0.011$ & $\boldsymbol{0.153\pm0.002}$ \\
+MLP SGD & $0.845\pm0.031$ & $0.919\pm0.017$ & $3.684\pm0.389$ \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Limitations and scope}
+This document specifies the feature regressor used by Binaml.  It does not
+claim optimality of residual-sign learning.  The reported comparison is
+limited to the versioned synthetic task, fixed configurations, and
+reproducible baseline runs described above.
+\end{document}

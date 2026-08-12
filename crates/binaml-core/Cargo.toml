@@ -1,0 +1,16 @@
+[package]
+name = "binaml-core"
+version.workspace = true
+edition.workspace = true
+description = "Layered boolean-function learning for online regression"
+license.workspace = true
+repository.workspace = true
+homepage = "https://github.com/binaml/binaml"
+readme = "README.md"
+exclude = ["profile.json.gz"]
+keywords = ["boolean-functions", "machine-learning", "online-learning", "streaming"]
+categories = ["algorithms", "science"]
+
+[lib]
+name = "binaml_core"
+

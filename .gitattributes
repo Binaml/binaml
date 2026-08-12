@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+*.pdf binary
+*.so binary
+*.dylib binary
+*.pyd binary

@@ -1,0 +1,55 @@
+{
+  "models": [
+    {
+      "name": "BRegressor",
+      "factory": "binaml.models:BRegressor",
+      "parameters": {
+        "learning_rate": 0.03,
+        "l2": 0.0001,
+        "batch_size": 32,
+        "sgd_steps": 3,
+        "parent_top_k": 8,
+        "features_per_layer": 32,
+        "candidate_capacity": 32,
+        "max_layers": 2
+      }
+    },
+    {
+      "name": "SGDLinearRegressor",
+      "factory": "binaml.models:SGDLinearRegressor",
+      "parameters": {
+        "learning_rate": 0.03,
+        "l2": 0.0001,
+        "center_binary_features": false,
+        "batch_size": 32,
+        "sgd_steps": 3
+      }
+    },
+    {
+      "name": "MLPRegressor",
+      "factory": "binaml.models:MLPRegressor",
+      "parameters": {
+        "batch_size": 32,
+        "sgd_steps": 3,
+        "hidden_layer_sizes": [50],
+        "activation": "relu",
+        "alpha": 0.0001,
+        "learning_rate": "constant",
+        "learning_rate_init": 0.003,
+        "power_t": 0.5,
+        "shuffle": true,
+        "random_state": 0,
+        "tol": 0.0001,
+        "verbose": false,
+        "momentum": 0.0,
+        "nesterovs_momentum": false,
+        "early_stopping": false,
+        "validation_fraction": 0.1,
+        "beta_1": 0.9,
+        "beta_2": 0.999,
+        "epsilon": 1e-08,
+        "n_iter_no_change": 10
+      }
+    }
+  ]
+}

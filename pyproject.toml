@@ -1,0 +1,60 @@
+[project]
+name = "binaml"
+dynamic = ["version"]
+description = "Online regression with layered boolean-function learning"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Romain Zimmer" },
+]
+license = { file = "LICENSE" }
+keywords = ["boolean-functions", "machine-learning", "online-learning", "streaming"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+benchmarks = [
+    "seaborn>=0.13",
+    "scikit-learn>=1.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/binaml/binaml"
+Repository = "https://github.com/binaml/binaml"
+Issues = "https://github.com/binaml/binaml/issues"
+
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "bindings/python/Cargo.toml"
+python-source = "python"
+module-name = "binaml._core"
+features = ["extension-module"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

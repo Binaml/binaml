@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use Binaml, please cite it using this metadata."
+title: "Binaml: Continual Learning for Binary Streaming Features"
+authors:
+  - family-names: Zimmer
+    given-names: Romain
+version: "0.1.0-alpha.1"
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/binaml/binaml"

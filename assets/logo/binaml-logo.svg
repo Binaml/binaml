@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Binaml</title>
+  <desc id="desc">The letter B from the Binaml wordmark, accompanied by the pixel dots from the Binaml wordmark, rendered in a white, italic terminal-inspired pixel typeface on a black background.</desc>
+  <rect width="512" height="512" fill="#000"/>
+  <defs>
+    <g id="block">
+      <rect width="31" height="31" rx="3" fill="#fff" stroke="#fff" stroke-width="1"/>
+    </g>
+  </defs>
+  <g aria-label="Binaml">
+    <g transform="translate(123.6 163) skewX(-16)">
+      <use href="#block" x="78" y="0"/>
+      <use href="#block" x="156" y="0"/>
+      <use href="#block" x="182" y="0"/>
+      <use href="#block" x="208" y="0"/>
+      <use href="#block" x="234" y="0"/>
+      <use href="#block" x="260" y="0"/>
+      <use href="#block" x="182" y="26"/>
+      <use href="#block" x="286" y="26"/>
+      <use href="#block" x="182" y="52"/>
+      <use href="#block" x="286" y="52"/>
+      <use href="#block" x="26" y="78"/>
+      <use href="#block" x="78" y="78"/>
+      <use href="#block" x="104" y="78"/>
+      <use href="#block" x="182" y="78"/>
+      <use href="#block" x="208" y="78"/>
+      <use href="#block" x="234" y="78"/>
+      <use href="#block" x="260" y="78"/>
+      <use href="#block" x="182" y="104"/>
+      <use href="#block" x="286" y="104"/>
+      <use href="#block" x="182" y="130"/>
+      <use href="#block" x="286" y="130"/>
+      <use href="#block" x="0" y="156"/>
+      <use href="#block" x="26" y="156"/>
+      <use href="#block" x="52" y="156"/>
+      <use href="#block" x="104" y="156"/>
+      <use href="#block" x="182" y="156"/>
+      <use href="#block" x="208" y="156"/>
+      <use href="#block" x="234" y="156"/>
+      <use href="#block" x="260" y="156"/>
+    </g>
+  </g>
+</svg>

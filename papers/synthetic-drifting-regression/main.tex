@@ -1,0 +1,385 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\ExplSyntaxOn
+\ior_new:N \g_binaml_metadata_ior
+\tl_new:N \g_binaml_title_tl
+\seq_new:N \g_binaml_authors_seq
+\seq_new:N \g_binaml_author_emails_seq
+\tl_new:N \g_binaml_date_tl
+\tl_new:N \g_binaml_status_tl
+\cs_new_protected:Npn \binaml_read_metadata:
+  {
+    \ior_open:Nn \g_binaml_metadata_ior { metadata.yaml }
+    \ior_str_map_inline:Nn \g_binaml_metadata_ior
+      {
+        \regex_match:nnTF { \A title: } { ##1 }
+          {
+            \tl_gset:Nn \g_binaml_title_tl { ##1 }
+            \regex_replace_once:nnN
+              { \A title: \s* " } { } \g_binaml_title_tl
+            \regex_replace_once:nnN
+              { " \s* \Z } { } \g_binaml_title_tl
+          }
+          {
+            \regex_match:nnTF { \A \s* email: } { ##1 }
+              {
+                \tl_set:Nn \l_tmpa_tl { ##1 }
+                \regex_replace_once:nnN
+                  { \A \s* email: \s* " } { } \l_tmpa_tl
+                \regex_replace_once:nnN
+                  { " \s* \Z } { } \l_tmpa_tl
+                \seq_gput_right:NV \g_binaml_author_emails_seq \l_tmpa_tl
+              }
+              {
+                \regex_match:nnTF { \A date: } { ##1 }
+                  {
+                    \tl_gset:Nn \g_binaml_date_tl { ##1 }
+                    \regex_replace_once:nnN
+                      { \A date: \s* } { } \g_binaml_date_tl
+                  }
+                  {
+                    \regex_match:nnTF { \A status: } { ##1 }
+                      {
+                        \tl_gset:Nn \g_binaml_status_tl { ##1 }
+                        \regex_replace_once:nnN
+                          { \A status: \s* } { } \g_binaml_status_tl
+                      }
+                      {
+                        \regex_match:nnT { \A \s* - \s* name: } { ##1 }
+                          {
+                            \tl_set:Nn \l_tmpa_tl { ##1 }
+                            \regex_replace_once:nnN
+                              { \A \s* - \s* name: \s* } { } \l_tmpa_tl
+                            \seq_gput_right:NV \g_binaml_authors_seq \l_tmpa_tl
+                          }
+                      }
+                  }
+              }
+          }
+      }
+    \ior_close:N \g_binaml_metadata_ior
+  }
+\binaml_read_metadata:
+\NewDocumentCommand \BinamlTitle { } { \tl_use:N \g_binaml_title_tl }
+\NewDocumentCommand \BinamlAuthors { }
+  {
+    \seq_map_indexed_inline:Nn \g_binaml_authors_seq
+      {
+        ##2 \\
+        \href
+          {mailto:\seq_item:Nn \g_binaml_author_emails_seq { ##1 }}
+          {\seq_item:Nn \g_binaml_author_emails_seq { ##1 }}
+        \int_compare:nNnT { ##1 } < { \seq_count:N \g_binaml_authors_seq }
+          { \and }
+      }
+  }
+\NewDocumentCommand \BinamlDate { }
+  {
+    \tl_use:N \g_binaml_date_tl
+    \str_if_eq:eeT { \tl_use:N \g_binaml_status_tl } { draft }
+      { \space (Draft) }
+  }
+\ExplSyntaxOff
+\title{\BinamlTitle}
+\author{\BinamlAuthors}
+\date{\BinamlDate}
+\begin{document}
+\maketitle
+\begin{abstract}
+This paper specifies a reproducible synthetic online regression task for binary
+feature vectors.
+Concept drift shows up across real-world ML, yet most frameworks still assume
+stationary train/serve data; this task takes nonstationarity as a first-class
+requirement with controllable drift axes rather than an afterthought.
+A synthetic setting makes it easy to experiment with controlled, reproducible
+scenarios---known latent mechanisms, seeded trajectories, and explicit scenario
+knobs---so adaptation can be studied without confounding from opaque real
+streams.  The paper defines the synthetic environment, its independent sources
+of concept drift, the model boundary, and the prequential evaluation protocol.
+It is a task and library specification, not a performance report.
+\end{abstract}
+
+\section{Notation}
+\begin{description}
+  \item[$\xi,d,m,\sigma$] Root seed, input width, number of components, and noise standard deviation.
+  \item[$x_t,g_t$] Current binary input and latent activity-gate states.
+  \item[$y_t,\tilde y_t$] Noiseless and observed regression targets.
+  \item[$b_t,\epsilon_t,\sigma$] Intercept, observation noise, and its standard deviation.
+  \item[$f_i:\{0,1\}^d\to\{0,1\},w_i$] Fixed binary indicator function and its fixed weight.
+  \item[$k_i,I_i$] Function arity and ordered selected-feature indices.
+  \item[$h_i$] Hamming threshold.
+  \item[$p_{\mathrm{table}},k_{\mathrm{table,max}}$] Truth-table family probability and maximum arity.
+  \item[$k_{\mathrm{threshold,min}},k_{\mathrm{threshold,max}}$] Hamming-threshold arity bounds.
+  \item[$p_{\mathrm{activation,min}},p_{\mathrm{activation,max}}$] Truth-table activation-probability range.
+  \item[$q_{\max},p_{\min},p_{\max}$] Maximum parent count and CPT range.
+  \item[$p_x,p_{\mathrm{sample,min}}^x,p_{\mathrm{sample,max}}^x$] Input distribution-sampling probability and node-sampling-probability range.
+  \item[$p_g,p_{\mathrm{sample,min}}^g,p_{\mathrm{sample,max}}^g$] Gate distribution-sampling probability and node-sampling-probability range.
+  \item[$w_{\min},w_{\max},b_{\min},b_{\max}$] Weight and intercept ranges.
+  \item[$p_b$] Intercept-sampling probability.
+  \item[$S_t^x,S_t^g$] Input- and gate-distribution sampling indicators.
+  \item[$S_{t,j}^x,S_{t,j}^g$] Input-node and gate-node sampling indicators.
+  \item[$S_t^b$] Intercept-sampling indicator.
+\end{description}
+
+\section{Synthetic environment and target}
+At time $t$, an environment emits a binary vector $x_t\in\{0,1\}^d$ and an
+observed scalar target $\tilde y_t$.  The environment also maintains binary
+activity gates $g_t\in\{0,1\}^m$, one per target component, which are never
+supplied to a model.  Keeping $g_i$ hidden keeps activity latent: if gates were
+observed, $g_i f_i(x)$ would collapse to just another visible component
+function, and the same $f_i$ could not turn on and off without becoming a
+distinct observed feature.  A latent target is
+\[
+y_t=b_t+\sum_{i=1}^{m}w_i g_{t,i}f_i(x_t),
+\qquad
+\epsilon_t\sim\mathcal N(0,\sigma^2),
+\qquad
+\tilde y_t=y_t+\epsilon_t,
+\]
+where $\epsilon_t$ is zero-mean Gaussian noise.  This form asks models to
+discover structure in input bits.  With enough boolean components it can in
+theory approximate arbitrary functions on binary inputs, while activity gates
+provide controllable levels of concept drift without rewriting the underlying
+components.  Each $f_i:\{0,1\}^d\to\{0,1\}$ is a binary indicator
+(boolean component) represented by either a truth table or a Hamming threshold
+over a selected subset of input-bit indices.  Truth tables and Hamming
+thresholds are simple, exact boolean generators with controllable arity and
+sparsity: tables stress arbitrary local interactions; thresholds stress
+monotone count structure.  Together they cover more than one boolean style
+without a huge data-generating process.  The selected-bit order is significant:
+the first bit is the most-significant bit in the truth-table index.
+
+\paragraph{Fixed target construction.}
+For each component, sample the truth-table family with probability
+$p_{\mathrm{table}}$:
+\[
+ C_i\sim\operatorname{Bernoulli}(p_{\mathrm{table}}).
+\]
+If $C_i=1$, draw
+\[
+\begin{aligned}
+ k_i &\sim\operatorname{DiscreteUniform}
+       \{1,\ldots,k_{\mathrm{table,max}}\},\\
+ I_i &\sim\operatorname{Uniform}\!\left(
+       \binom{\{1,\ldots,d\}}{k_i}\right),\\
+ p_{\mathrm{activation},i} &\sim\operatorname{Uniform}
+       (p_{\mathrm{activation,min}},p_{\mathrm{activation,max}}),
+\end{aligned}
+\]
+where $k_{\mathrm{table,max}}$ is the maximum truth-table arity.
+Sample its $2^{k_i}$ lookup-table entries independently from
+$\operatorname{Bernoulli}(p_{\mathrm{activation},i})$.  The ordered selected
+bit values index the table.
+If $C_i=0$, draw
+\[
+\begin{aligned}
+ k_i &\sim\operatorname{DiscreteUniform}
+       \{k_{\mathrm{threshold,min}},\ldots,
+         k_{\mathrm{threshold,max}}\},\\
+ I_i &\sim\operatorname{Uniform}\!\left(
+       \binom{\{1,\ldots,d\}}{k_i}\right),\\
+ h_i &\sim\operatorname{DiscreteUniform}\{1,\ldots,k_i\},
+\end{aligned}
+\]
+where $k_{\mathrm{threshold,min}}$ and
+$k_{\mathrm{threshold,max}}$ are the configured minimum and maximum
+Hamming-threshold arities.  The component is
+\[
+ f_i(x)=\mathbf{1}\!\left\{
+ \sum_{\ell=1}^{k_i}x_{I_{i,\ell}}\geq h_i
+ \right\}.
+\]
+Weights are sampled once, for example
+$w_i\sim\operatorname{Uniform}(w_{\min},w_{\max})$, and remain fixed for the
+trajectory.  The initial intercept is
+\[
+ b_0\sim\operatorname{Uniform}(b_{\min},b_{\max}).
+\]
+Thus functions and weights are fixed after initialization.  Holding components
+fixed keeps drift attributable to gates, intercept, noise, and input-state
+dynamics, and lets evaluation ask how fast a model re-adapts to scenarios it
+has already faced---for example because it built and kept reusable
+representations rather than forgetting them.  Output changes arise from
+activity-gate transitions and independent intercept sampling.
+
+\section{Input and gate state dynamics}
+Let $X_t=(X_{t,1},\ldots,X_{t,d})$ be the input state and
+$G_t=(G_{t,1},\ldots,G_{t,m})$ the activity-gate state.  We describe input
+sampling below.  Gate sampling uses the same procedure independently.
+\[
+ X_t\sim P_x.
+\]
+The input DAG has $d$ nodes.  At initialization, sample its topological order:
+\[
+ \pi_x\sim\operatorname{Uniform}(\mathcal S_d).
+\]
+For each node, uniformly sample a parent subset from all subsets of earlier
+nodes in its topological order with at most $q_{\max}$ parents.  Independently
+sample every conditional Bernoulli probability in its CPT uniformly from
+$[p_{\min},p_{\max}]$.  Sample $X_0$ ancestrally from this DAG, then sample
+its shared node-sampling probability:
+\[
+p_{\mathrm{sample}}^x\sim\operatorname{Uniform}
+\left(p_{\mathrm{sample,min}}^x,
+      p_{\mathrm{sample,max}}^x\right).
+\]
+Apply this construction independently to $G_t$: use $m$ nodes,
+$\pi_g\sim\operatorname{Uniform}(\mathcal S_m)$, and the gate-specific
+$p_g$, $p_{\mathrm{sample,min}}^g$, and $p_{\mathrm{sample,max}}^g$.
+Neither topological order alters the model-visible input-coordinate order.
+
+\paragraph{State updates.}
+After an emitted sample, draw the input-distribution sampling indicator:
+\[
+ S_t^x\sim\operatorname{Bernoulli}(p_x).
+\]
+If $S_t^x=1$, sample a new input DAG order, parents, CPTs,
+and $p_{\mathrm{sample}}^x$ while retaining $X_t$.  Then sample every input
+node through
+\[
+ S_{t,j}^x\sim\operatorname{Bernoulli}(p_{\mathrm{sample}}^x)
+ \quad (j\in\{1,\ldots,d\}),
+\]
+then, in topological order, ancestrally sample nodes with indicator one under
+the current input DAG.
+
+Each sampled node is drawn from its CPT conditional on its current parent
+values.  This partial ancestral sampling intentionally does not guarantee that
+the current state follows the configured DAG distribution.  The gate state
+uses this same update independently: draw $S_t^g\sim\operatorname{Bernoulli}(p_g)$,
+retain $G_t$ if it is zero or sample a new gate distribution if it is one,
+then sample gate nodes in order with shared probability
+$p_{\mathrm{sample}}^g$.  Each shared node-sampling probability controls
+persistence and is sampled when its distribution is initialized or sampled
+again.
+
+\section{Stream-generation procedure}
+\noindent\textbf{Configuration}
+\begin{description}
+  \item[\textbf{Run}] Root seed $\xi$ determines all random draws; $d$ and
+  $m$ set the input width and number of target components; $\sigma$ sets the
+  observation-noise standard deviation.
+  \item[\textbf{Function}] $p_{\mathrm{table}}$, $k_{\mathrm{table,max}}$,
+  $k_{\mathrm{threshold,min}}$, $k_{\mathrm{threshold,max}}$,
+  $p_{\mathrm{activation,min}}$, and $p_{\mathrm{activation,max}}$ determine
+  the function family, its arity bounds, and truth-table entry probabilities.
+  \item[\textbf{Distribution structure}] Parent limit $q_{\max}$ and CPT
+  range $[p_{\min},p_{\max}]$ bound each input and gate DAG's parents and
+  conditional probabilities.
+  \item[\textbf{Input dynamics}] $p_x$ controls new input-distribution
+  sampling; $p_{\mathrm{sample,min}}^x$ and
+  $p_{\mathrm{sample,max}}^x$ bound the shared input-node sampling
+  probability.
+  \item[\textbf{Gate dynamics}] $p_g$ controls new gate-distribution sampling;
+  $p_{\mathrm{sample,min}}^g$ and $p_{\mathrm{sample,max}}^g$ bound the
+  shared gate-node sampling probability.
+  \item[\textbf{Target scale}] $w_{\min}$, $w_{\max}$, $b_{\min}$,
+  $b_{\max}$ bound weights and intercepts; $p_b$ controls new intercept
+  sampling.
+\end{description}
+
+\noindent\textbf{Initialize:} sample fixed functions $f_i$ and weights $w_i$,
+initial intercept $b_0$, input and gate distributions, states $X_0,G_0$, and
+their shared node-sampling probabilities $p_{\mathrm{sample}}^x$ and
+$p_{\mathrm{sample}}^g$.
+
+\noindent\textbf{For} $t=0,1,\ldots$:
+\begin{enumerate}
+  \item Set $o_t\gets X_t$ and
+  \[
+    \tilde y_t\gets b_t+\sum_{i=1}^m w_iG_{t,i}f_i(X_t)+\epsilon_t,
+    \qquad \epsilon_t\sim\mathcal N(0,\sigma^2);
+  \]
+  emit $(o_t,\tilde y_t)$.
+  \item Draw $S_t^x$ and $S_t^g$.  If either is one, resample the
+  corresponding distribution; retain $X_t$ or $G_t$.
+  \item For every input node $j$, draw
+  $S_{t,j}^x\sim\operatorname{Bernoulli}(p_{\mathrm{sample}}^x)$; in
+  topological order, ancestrally sample nodes with indicator one to produce
+  $X_{t+1}$.  Repeat independently
+  for every gate node using
+  $S_{t,j}^g\sim\operatorname{Bernoulli}(p_{\mathrm{sample}}^g)$ to produce
+  $G_{t+1}$.
+  \item Draw $S_t^b\sim
+  \operatorname{Bernoulli}(p_b)$.  If it is one,
+  sample $b_{t+1}\sim\operatorname{Uniform}(b_{\min},b_{\max})$; otherwise
+  set $b_{t+1}\gets b_t$.
+\end{enumerate}
+
+\section{Drift mechanisms}
+Input and gate distribution sampling change their distributions abruptly.
+Neither sampling operation directly changes its family's current binary state,
+so latent activity continues from its pre-sampling value and is subsequently
+updated only by the usual partial ancestral sampling under the new
+distribution.  Partial ancestral sampling provides persistent,
+within-family correlated states but does not necessarily follow either
+configured DAG distribution.  Functions and weights do not drift.
+Activity-gate sampling and independent intercept sampling are the sources of output
+shifts.
+Gates remain unobserved activity variation.  Oracle metadata is optional and
+is never supplied to a model.
+
+\section{API and integration boundaries}
+Swappable generators, models, and metrics are required for fair prequential
+benchmarks; coupling them would bake evaluation assumptions into model code.
+The \texttt{binaml.environments} package owns generation, configuration,
+serialization, and state restoration.  \texttt{binaml.models} owns online
+models and has no environment dependency.  A model implements
+\texttt{predict(features)} and \texttt{observe(features, target)}.  The
+prediction call may retain its routing or matching context; \texttt{observe}
+receives the features and target, and may use the retained context or rerun
+inference.  The \texttt{binaml.evaluation}
+package combines the two through predict-then-observe prequential evaluation.
+Named benchmark scenarios only compose these
+independent components.
+
+\section{Reference online baselines}
+The library provides two generic online baselines alongside the binary-feature
+regressor.  The linear SGD baseline predicts with an affine function of the
+observed coordinates.  The MLP baseline wraps scikit-learn's
+\texttt{MLPRegressor} with its \texttt{sgd} solver.  It is optional and is
+installed through the \texttt{benchmarks} dependency extra so ordinary library
+users do not need scikit-learn.
+
+All provided models use the same replay convention.  After observing a target,
+they retain the most recent $B$ labeled samples and make $S$ optimization
+updates on that window.  The linear baseline applies an averaged full-batch
+gradient update at each step.  The MLP uses one \texttt{partial\_fit} pass per
+step; its internal minibatch size equals the current replay-window length
+during warm-up.  Reported comparisons must state each baseline's architecture,
+learning rate, regularization, replay size $B$, step count $S$, optimizer
+settings, and random seed.
+
+\section{Determinism and reproducibility}
+Every trajectory is determined by a validated JSON configuration and a single
+root seed $\xi$.  The implementation splits that seed into stable PCG64DXSM
+substreams for initialization, sampling, drift, and noise.  Snapshots include
+the full latent state and bit-generator states.  Scenarios, generator versions,
+and configuration fingerprints are recorded with run artifacts.
+
+\section{Prequential evaluation protocol}
+For each emitted $(x_t,\tilde y_t)$, an evaluator first records the model
+prediction, then exposes the target through \texttt{observe}.  Mean squared
+error is computed from the recorded pre-update predictions.  Benchmarks publish
+their horizon, scenario configuration, seeds, generator version, and separate
+total, prediction, and observation timings; aggregate metrics alone are
+insufficient for replication.
+
+\paragraph{Warm-up.}
+A scenario may specify a non-negative \texttt{warmup\_samples} count smaller
+than its horizon.  Models predict and observe these initial samples normally,
+but their errors are excluded from reported MSE and RMSE.  Time-series plots
+retain the full trajectory and mark the first evaluated sample with a vertical
+line so that the learning period remains visible.
+
+\section{Limitations and scope}
+The task is designed for controlled adaptation studies.  It does not claim
+that synthetic drift matches a particular deployment, nor does this document
+make comparative performance claims.  Results may be added only for versioned
+scenarios with repeatable baseline runs.
+\end{document}
