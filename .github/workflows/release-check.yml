@@ -20,13 +20,59 @@ permissions:
   contents: read
 
 jobs:
+  wheel-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - id: matrix
+        name: Select wheel matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          python - <<'PY'
+          import itertools
+          import json
+          import os
+
+          versions = [
+              {"python": "3.13", "abi": "cp313-cp313"},
+          ]
+          platforms = [
+              {"platform": "linux-x86_64", "runner": "ubuntu-latest", "target": "x86_64"},
+              {
+                  "platform": "macos-universal2",
+                  "runner": "macos-latest",
+                  "target": "universal2-apple-darwin",
+              },
+              {"platform": "windows-x86_64", "runner": "windows-latest", "target": "x64"},
+          ]
+          full = (
+              os.environ["EVENT_NAME"] != "pull_request"
+              or os.environ["HEAD_REF"].startswith("release/")
+          )
+          include = [
+              {**version, **platform}
+              for version, platform in itertools.product(versions, platforms)
+          ]
+          if not full:
+              include = [{**include[0], "smoke": True}]
+          matrix = json.dumps({"include": include}, separators=(",", ":"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={matrix}\n")
+          PY
+
   source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v6
       - name: Check release metadata
@@ -51,46 +97,37 @@ jobs:
           if-no-files-found: error
 
   wheels:
-    name: ${{ matrix.platform.name }} / Python ${{ matrix.python.version }}
-    runs-on: ${{ matrix.platform.runner }}
+    needs: wheel-matrix
+    name: ${{ matrix.platform }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        python:
-          - version: "3.11"
-            abi: cp311-cp311
-          - version: "3.12"
-            abi: cp312-cp312
-          - version: "3.13"
-            abi: cp313-cp313
-        platform:
-          - name: linux-x86_64
-            runner: ubuntu-latest
-            target: x86_64
-          - name: macos-universal2
-            runner: macos-latest
-            target: universal2-apple-darwin
-          - name: windows-x86_64
-            runner: windows-latest
-            target: x64
+      matrix: ${{ fromJSON(needs.wheel-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python.version }}
+          python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build Linux wheel
-        if: runner.os == 'Linux'
+      - name: Build Linux smoke wheel
+        if: runner.os == 'Linux' && matrix.smoke
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
+          target: ${{ matrix.target }}
+          container: off
+          args: --release --out dist --interpreter python
+      - name: Build Linux release wheel
+        if: runner.os == 'Linux' && !matrix.smoke
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
           manylinux: auto
-          args: --release --out dist --interpreter /opt/python/${{ matrix.python.abi }}/bin/python
+          args: --release --out dist --interpreter /opt/python/${{ matrix.abi }}/bin/python
       - name: Build macOS or Windows wheel
         if: runner.os != 'Linux'
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
+          target: ${{ matrix.target }}
           args: --release --out dist --interpreter python
       - name: Install wheel
         run: |
@@ -101,6 +138,6 @@ jobs:
           python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
       - uses: actions/upload-artifact@v7
         with:
-          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python.version }}
+          name: wheel-${{ matrix.platform }}-py${{ matrix.python }}
           path: dist/*
           if-no-files-found: error
