@@ -2,7 +2,7 @@
 
 All notable changes to Binaml are documented here.
 
-## [0.1.0-alpha.1]
+## [0.1.0-alpha.1] - 2026-08-12
 
 ### Added
 - `binaml-core` Rust crate with the online `BRegressor` model.
