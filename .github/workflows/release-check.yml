@@ -62,7 +62,7 @@ jobs:
               for version, platform in itertools.product(versions, platforms)
           ]
           if not full:
-              include = [include[0]]
+              include = [{**include[0], "smoke": True}]
           matrix = json.dumps({"include": include}, separators=(",", ":"))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"matrix={matrix}\n")
@@ -111,8 +111,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build Linux wheel
-        if: runner.os == 'Linux'
+      - name: Build Linux smoke wheel
+        if: runner.os == 'Linux' && matrix.smoke
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          container: off
+          args: --release --out dist --interpreter python
+      - name: Build Linux release wheel
+        if: runner.os == 'Linux' && !matrix.smoke
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
