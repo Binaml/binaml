@@ -1,4 +1,4 @@
-![Binaml](assets/banner/binaml-banner.svg)
+![Binaml](https://raw.githubusercontent.com/Binaml/binaml/main/assets/banner/binaml-banner.svg)
 
 Binaml focuses on continual learning models over streams of binary features
 subject to data drift.
@@ -26,7 +26,7 @@ The supported Python API is `binaml.BRegressor`. The supported Rust API is
 Install the alpha package with uv:
 
 ```bash
-uv add "binaml==0.1.0a1"
+uv add "binaml==0.1.0a2"
 ```
 
 To run from a checkout, install Python 3.13+, a Rust toolchain, and the project
@@ -58,7 +58,7 @@ Add `binaml-core` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-binaml-core = "0.1.0-alpha.1"
+binaml-core = "0.1.0-alpha.2"
 ```
 
 ```rust
