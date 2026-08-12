@@ -1,7 +1,7 @@
 [project]
 name = "binaml"
 dynamic = ["version"]
-description = "Online regression with layered boolean-function learning"
+description = "Continual learning models over streams of binary features"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [

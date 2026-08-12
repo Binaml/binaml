@@ -2,7 +2,7 @@
 name = "binaml-core"
 version.workspace = true
 edition.workspace = true
-description = "Layered boolean-function learning for online regression"
+description = "Continual learning models over streams of binary features"
 license.workspace = true
 repository.workspace = true
 homepage = "https://github.com/binaml/binaml"
