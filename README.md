@@ -29,7 +29,7 @@ Install the alpha package with uv:
 uv add "binaml==0.1.0a1"
 ```
 
-To run from a checkout, install Python 3.11+, a Rust toolchain, and the project
+To run from a checkout, install Python 3.13+, a Rust toolchain, and the project
 dependencies:
 
 ```bash

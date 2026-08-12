@@ -3,7 +3,7 @@ name = "binaml"
 dynamic = ["version"]
 description = "Online regression with layered boolean-function learning"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 authors = [
     { name = "Romain Zimmer" },
 ]
@@ -16,8 +16,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -56,5 +54,5 @@ dev = [
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 100
