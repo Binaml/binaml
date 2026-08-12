@@ -51,12 +51,18 @@ jobs:
           if-no-files-found: error
 
   wheels:
-    name: ${{ matrix.platform.name }} / Python ${{ matrix.python }}
+    name: ${{ matrix.platform.name }} / Python ${{ matrix.python.version }}
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13"]
+        python:
+          - version: "3.11"
+            abi: cp311-cp311
+          - version: "3.12"
+            abi: cp312-cp312
+          - version: "3.13"
+            abi: cp313-cp313
         platform:
           - name: linux-x86_64
             runner: ubuntu-latest
@@ -71,7 +77,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: ${{ matrix.python.version }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Build Linux wheel
         if: runner.os == 'Linux'
@@ -79,7 +85,7 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           manylinux: auto
-          args: --release --out dist --interpreter python
+          args: --release --out dist --interpreter /opt/python/${{ matrix.python.abi }}/bin/python
       - name: Build macOS or Windows wheel
         if: runner.os != 'Linux'
         uses: PyO3/maturin-action@v1
@@ -95,6 +101,6 @@ jobs:
           python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python }}
+          name: wheel-${{ matrix.platform.name }}-py${{ matrix.python.version }}
           path: dist/*
           if-no-files-found: error
