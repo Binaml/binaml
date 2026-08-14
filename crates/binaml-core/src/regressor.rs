@@ -1,10 +1,10 @@
 use crate::{
     FeatureId, FeatureLearner, FeatureLearningConfig, FeatureLearningError, FeatureStore, SignBatch,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
-struct ReplayLayout {
+struct FeatureLayout {
     references: Vec<FeatureId>,
     nodes: Vec<FeatureNode>,
 }
@@ -19,7 +19,7 @@ enum FeatureNode {
     },
 }
 
-impl ReplayLayout {
+impl FeatureLayout {
     fn new(store: &FeatureStore) -> Result<Self, BRegressorError> {
         let mut references = Vec::new();
         let mut slots = HashMap::new();
@@ -73,26 +73,6 @@ impl ReplayLayout {
     }
 }
 
-#[derive(Debug)]
-struct ReplayCache {
-    layout: ReplayLayout,
-    rows: VecDeque<Vec<u8>>,
-}
-
-impl ReplayCache {
-    fn new(store: &FeatureStore, capacity: usize) -> Result<Self, BRegressorError> {
-        Ok(Self {
-            layout: ReplayLayout::new(store)?,
-            rows: VecDeque::with_capacity(capacity),
-        })
-    }
-
-    fn push(&mut self, features: &[bool]) -> Result<(), BRegressorError> {
-        self.rows.push_back(self.layout.evaluate(features)?);
-        Ok(())
-    }
-}
-
 /// Configuration for [`BRegressor`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RegressorConfig {
@@ -124,9 +104,9 @@ pub struct BRegressor {
     learner: FeatureLearner,
     weights: HashMap<FeatureId, f64>,
     intercept: f64,
-    replay_features: VecDeque<Vec<bool>>,
-    replay_targets: VecDeque<f64>,
-    replay_cache: ReplayCache,
+    layout: FeatureLayout,
+    feature_batch_features: Vec<Vec<bool>>,
+    feature_batch_signs: Vec<bool>,
     n_observed: usize,
 }
 
@@ -145,18 +125,19 @@ impl BRegressor {
             return Err(BRegressorError::InvalidConfig);
         }
         let learner = FeatureLearner::new(source_feature_count, config.feature_learning)?;
-        let replay_cache = ReplayCache::new(learner.store(), config.feature_learning.batch_size)?;
+        let layout = FeatureLayout::new(learner.store())?;
         let weights = (0..source_feature_count)
             .map(|index| (FeatureId { layer: 0, index }, 0.0))
             .collect();
+        let batch_size = config.feature_learning.batch_size;
         Ok(Self {
             config,
             learner,
             weights,
             intercept: 0.0,
-            replay_features: VecDeque::with_capacity(config.feature_learning.batch_size),
-            replay_targets: VecDeque::with_capacity(config.feature_learning.batch_size),
-            replay_cache,
+            layout,
+            feature_batch_features: Vec::with_capacity(batch_size),
+            feature_batch_signs: Vec::with_capacity(batch_size),
             n_observed: 0,
         })
     }
@@ -213,36 +194,31 @@ impl BRegressor {
 
     pub fn predict(&self, features: &[bool]) -> Result<f64, BRegressorError> {
         self.validate_features(features)?;
-        let values = self.replay_cache.layout.evaluate(features)?;
+        let values = self.layout.evaluate(features)?;
         Ok(self.prediction_from_values(&values))
     }
 
-    /// Updates the linear model from a rolling replay batch.
+    /// Updates the linear model from one streaming observation.
     pub fn observe(&mut self, features: &[bool], target: f64) -> Result<(), BRegressorError> {
         self.validate_features(features)?;
         if !target.is_finite() {
             return Err(BRegressorError::NonFiniteTarget);
         }
-        if self.replay_features.len() == self.config.feature_learning.batch_size {
-            self.replay_features.pop_front();
-            self.replay_targets.pop_front();
-            self.replay_cache.rows.pop_front();
-        }
-        self.replay_cache.push(features)?;
-        self.replay_features.push_back(features.to_vec());
-        self.replay_targets.push_back(target);
         self.n_observed += 1;
 
-        let feature_signs = self
-            .n_observed
-            .is_multiple_of(self.config.feature_learning.batch_size)
-            .then(|| self.replay_residual_signs())
-            .transpose()?;
+        let values = self.layout.evaluate(features)?;
+        let sign = target - self.prediction_from_values(&values) >= 0.0;
+        self.feature_batch_features.push(features.to_vec());
+        self.feature_batch_signs.push(sign);
+
         for _ in 0..self.config.sgd_steps {
-            self.update_replay_batch();
+            self.update_single_sample(target, &values);
         }
-        if let Some(signs) = feature_signs {
-            self.learn_replay_batch(&signs)?;
+
+        if self.feature_batch_features.len() == self.config.feature_learning.batch_size {
+            self.learn_feature_batch()?;
+            self.feature_batch_features.clear();
+            self.feature_batch_signs.clear();
         }
         Ok(())
     }
@@ -261,7 +237,6 @@ impl BRegressor {
     fn prediction_from_values(&self, values: &[u8]) -> f64 {
         self.intercept
             + self
-                .replay_cache
                 .layout
                 .references
                 .iter()
@@ -270,57 +245,39 @@ impl BRegressor {
                 .sum::<f64>()
     }
 
-    fn replay_residual_signs(&self) -> Result<Vec<bool>, BRegressorError> {
-        self.replay_targets
-            .iter()
-            .zip(&self.replay_cache.rows)
-            .map(|(target, values)| Ok(*target - self.prediction_from_values(values) >= 0.0))
-            .collect()
-    }
-
-    fn update_replay_batch(&mut self) {
-        let mut intercept_gradient = 0.0;
-        let mut weight_gradients = HashMap::new();
-        for (target, values) in self.replay_targets.iter().zip(&self.replay_cache.rows) {
-            let prediction = self.prediction_from_values(values);
-            let error = target - prediction;
-            intercept_gradient += error;
-            for (reference, value) in self.replay_cache.layout.references.iter().zip(values) {
-                let value = 2.0 * f64::from(*value) - 1.0;
-                *weight_gradients.entry(*reference).or_insert(0.0) += error * value;
-            }
-        }
-        let batch_size = self.replay_features.len() as f64;
+    fn update_single_sample(&mut self, target: f64, values: &[u8]) {
+        let prediction = self.prediction_from_values(values);
+        let error = target - prediction;
         let rate = self.config.learning_rate;
         let decay = 1.0 - rate * self.config.l2;
         for weight in self.weights.values_mut() {
             *weight *= decay;
         }
-        self.intercept += rate * intercept_gradient / batch_size;
-        for (reference, gradient) in weight_gradients {
-            let weight = self.weights.entry(reference).or_insert(0.0);
-            *weight += rate * gradient / batch_size;
+        self.intercept += rate * error;
+        for (reference, value) in self.layout.references.iter().zip(values) {
+            let value = 2.0 * f64::from(*value) - 1.0;
+            let weight = self.weights.entry(*reference).or_insert(0.0);
+            *weight += rate * error * value;
         }
     }
 
-    fn learn_replay_batch(&mut self, signs: &[bool]) -> Result<(), BRegressorError> {
+    fn learn_feature_batch(&mut self) -> Result<(), BRegressorError> {
         let source_count = self.store().source_feature_count();
         let columns: Vec<Vec<bool>> = (0..source_count)
-            .map(|index| self.replay_features.iter().map(|row| row[index]).collect())
+            .map(|index| {
+                self.feature_batch_features
+                    .iter()
+                    .map(|row| row[index])
+                    .collect()
+            })
             .collect();
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
         self.learner.observe_batch(SignBatch {
             feature_columns: &column_refs,
-            signs,
+            signs: &self.feature_batch_signs,
         })?;
         self.sync_weights();
-        let layout = ReplayLayout::new(self.store())?;
-        self.replay_cache.layout = layout;
-        self.replay_cache.rows = self
-            .replay_features
-            .iter()
-            .map(|features| self.replay_cache.layout.evaluate(features))
-            .collect::<Result<_, _>>()?;
+        self.layout = FeatureLayout::new(self.store())?;
         Ok(())
     }
 
@@ -356,15 +313,15 @@ mod tests {
     }
 
     #[test]
-    fn updates_source_weights_with_replay_batch_gradient_and_weight_decay() {
+    fn updates_source_weights_with_online_gradient_and_weight_decay() {
         let mut model = BRegressor::new(1, config(2)).unwrap();
         model.observe(&[true], 2.0).unwrap();
         model.observe(&[false], 0.2).unwrap();
 
         assert!(
-            (model.weight(FeatureId { layer: 0, index: 0 }).unwrap() - 0.266).abs() < f64::EPSILON
+            (model.weight(FeatureId { layer: 0, index: 0 }).unwrap() - 0.176).abs() < f64::EPSILON
         );
-        assert!((model.intercept() - 0.29).abs() < f64::EPSILON);
+        assert!((model.intercept() - 0.22).abs() < f64::EPSILON);
         assert_eq!(model.n_observed(), 2);
     }
 

@@ -6,14 +6,16 @@ import numpy as np
 
 from binaml._core import BRegressorCore
 
+DEFAULT_LEARNING_RATE = 1e-3
+
 
 class BRegressor:
-    """Replay-batch regression over binary inputs and learned boolean features."""
+    """Online regression over binary inputs and learned boolean features."""
 
     def __init__(
         self,
         n_features: int,
-        learning_rate: float = 0.03,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
         l2: float = 1e-4,
         batch_size: int = 32,
         sgd_steps: int = 3,

@@ -3,6 +3,8 @@ use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+const DEFAULT_LEARNING_RATE: f64 = 1e-3;
+
 fn b_regressor_error(error: impl std::fmt::Debug) -> PyErr {
     PyValueError::new_err(format!("{error:?}"))
 }
@@ -25,7 +27,7 @@ fn binary_features(input: PyReadonlyArray1<'_, u8>) -> PyResult<Vec<bool>> {
 #[pymethods]
 impl BRegressorCore {
     #[new]
-    #[pyo3(signature = (source_feature_count, learning_rate=0.01, l2=1e-4, batch_size=32, sgd_steps=1, parent_top_k=8, features_per_layer=32, candidate_capacity=32, max_layers=2))]
+    #[pyo3(signature = (source_feature_count, learning_rate=DEFAULT_LEARNING_RATE, l2=1e-4, batch_size=32, sgd_steps=1, parent_top_k=8, features_per_layer=32, candidate_capacity=32, max_layers=2))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
