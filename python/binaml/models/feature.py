@@ -6,21 +6,22 @@ import numpy as np
 
 from binaml._core import BRegressorCore
 
+DEFAULT_LEARNING_RATE = 5e-3
+
 
 class BRegressor:
-    """Replay-batch regression over binary inputs and learned boolean features."""
+    """Online regression over an ensemble of batch-learned boolean functions."""
 
     def __init__(
         self,
         n_features: int,
-        learning_rate: float = 0.03,
+        learning_rate: float = DEFAULT_LEARNING_RATE,
         l2: float = 1e-4,
-        batch_size: int = 32,
-        sgd_steps: int = 3,
+        batch_size: int = 16,
+        sgd_steps: int = 5,
         parent_top_k: int = 8,
-        features_per_layer: int = 32,
-        candidate_capacity: int = 32,
-        max_layers: int = 2,
+        max_layers: int = 3,
+        max_functions: int = 64,
     ) -> None:
         if (
             isinstance(n_features, bool)
@@ -34,6 +35,9 @@ class BRegressor:
             or isinstance(sgd_steps, bool)
             or not isinstance(sgd_steps, int)
             or sgd_steps < 1
+            or isinstance(max_functions, bool)
+            or not isinstance(max_functions, int)
+            or max_functions < 1
         ):
             raise ValueError("invalid feature regressor configuration")
         self.n_features = n_features
@@ -46,9 +50,8 @@ class BRegressor:
             batch_size,
             sgd_steps,
             parent_top_k,
-            features_per_layer,
-            candidate_capacity,
             max_layers,
+            max_functions,
         )
         self._prediction_pending = False
 
@@ -85,3 +88,11 @@ class BRegressor:
     @property
     def n_observed(self) -> int:
         return int(self._model.n_observed)
+
+    @property
+    def function_count(self) -> int:
+        return int(self._model.function_count)
+
+    def weight(self, index: int) -> float | None:
+        value = self._model.weight(index)
+        return None if value is None else float(value)

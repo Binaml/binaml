@@ -89,6 +89,7 @@ def test_feature_regressor_requires_binary_predict_then_observe() -> None:
     assert model.predict(np.array([1, 0], dtype=np.uint8)) == 0.0
     model.observe(np.array([1, 0], dtype=np.uint8), 1.0)
     assert model.n_observed == 1
+    assert model.function_count >= 0
 
     model.predict(np.array([1, 0], dtype=np.uint8))
     with pytest.raises(RuntimeError, match="must follow"):
@@ -101,7 +102,7 @@ def test_feature_regressor_repeats_replay_batch_updates() -> None:
     model.predict(np.array([0], dtype=np.uint8))
     model.observe(np.array([0], dtype=np.uint8), 1.0)
 
-    assert model.intercept == pytest.approx(0.18)
+    assert model.intercept == pytest.approx(0.19)
 
 
 def test_mlp_replays_the_latest_batch_for_each_sgd_step() -> None:

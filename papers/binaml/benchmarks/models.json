@@ -4,14 +4,13 @@
       "name": "BRegressor",
       "factory": "binaml.models:BRegressor",
       "parameters": {
-        "learning_rate": 0.03,
+        "learning_rate": 0.005,
         "l2": 0.0001,
-        "batch_size": 32,
-        "sgd_steps": 3,
+        "batch_size": 16,
+        "sgd_steps": 5,
         "parent_top_k": 8,
-        "features_per_layer": 32,
-        "candidate_capacity": 32,
-        "max_layers": 2
+        "max_layers": 3,
+        "max_functions": 64
       }
     },
     {
