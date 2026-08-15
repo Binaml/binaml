@@ -1,23 +1,24 @@
-"""Replay-batch scikit-learn MLP baseline."""
+"""Replay-batch scikit-learn MLP multiclass baseline."""
 
 from __future__ import annotations
 
 from .sklearn_mlp import SklearnMLPOnlineModel
 
 
-class MLPRegressor(SklearnMLPOnlineModel):
-    """Online wrapper around scikit-learn's SGD MLP regressor."""
+class MLPClassifier(SklearnMLPOnlineModel):
+    """Online wrapper around scikit-learn's SGD MLP classifier."""
 
     def __init__(
         self,
         n_features: int,
-        batch_size: int = 32,
-        sgd_steps: int = 3,
-        hidden_layer_sizes: int | tuple[int, ...] = (50,),
+        n_classes: int,
+        batch_size: int = 12,
+        sgd_steps: int = 6,
+        hidden_layer_sizes: int | tuple[int, ...] = (75,),
         activation: str = "relu",
-        alpha: float = 0.0001,
+        alpha: float = 0.0,
         learning_rate: str = "constant",
-        learning_rate_init: float = 0.003,
+        learning_rate_init: float = 0.012,
         power_t: float = 0.5,
         shuffle: bool = True,
         random_state: int | None = 0,
@@ -36,7 +37,7 @@ class MLPRegressor(SklearnMLPOnlineModel):
             n_features,
             batch_size,
             sgd_steps,
-            n_classes=None,
+            n_classes=n_classes,
             hidden_layer_sizes=hidden_layer_sizes,
             activation=activation,
             alpha=alpha,

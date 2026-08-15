@@ -6,5 +6,18 @@ from .prequential import (
     RegressionSampleSource,
     evaluate_prequentially,
 )
+from .prequential_classification import (
+    ClassificationSampleSource,
+    PrequentialClassificationResult,
+    evaluate_prequentially_classification,
+)
 
-__all__ = ["EvaluationTiming", "PrequentialResult", "RegressionSampleSource", "evaluate_prequentially"]
+__all__ = [
+    "ClassificationSampleSource",
+    "EvaluationTiming",
+    "PrequentialClassificationResult",
+    "PrequentialResult",
+    "RegressionSampleSource",
+    "evaluate_prequentially",
+    "evaluate_prequentially_classification",
+]

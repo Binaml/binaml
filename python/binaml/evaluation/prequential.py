@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Protocol
 import numpy as np
 
 if TYPE_CHECKING:
-    from binaml.models.base import OnlineModel
+    from binaml.models.base import OnlineClassifier, OnlineModel
 
 
 class RegressionSampleSource(Protocol):
@@ -44,14 +44,16 @@ class PrequentialResult:
         return float(np.sqrt(self.mean_squared_error))
 
 
-def evaluate_prequentially(
-    model: OnlineModel,
-    source: Iterable[tuple[np.ndarray, float]],
-    n_samples: int | None = None,
-    on_step: Callable[[int], None] | None = None,
-) -> PrequentialResult:
-    """Predict features before observing their target."""
-    predictions, targets, errors = [], [], []
+def _evaluate_prequentially_loop(
+    model: OnlineModel | OnlineClassifier,
+    source: Iterable[tuple[np.ndarray, object]],
+    n_samples: int | None,
+    on_step: Callable[[int], None] | None,
+    score: Callable[[object, object], float | bool],
+) -> tuple[list[object], list[object], list[float | bool], EvaluationTiming]:
+    predictions: list[object] = []
+    targets: list[object] = []
+    scores: list[float | bool] = []
     total_seconds = 0.0
     prediction_seconds = 0.0
     observation_seconds = 0.0
@@ -63,16 +65,38 @@ def evaluate_prequentially(
         prediction_seconds += perf_counter() - prediction_start
         predictions.append(prediction)
         targets.append(target)
-        errors.append((prediction - target) ** 2 if np.isfinite(prediction) else float("nan"))
+        scores.append(score(prediction, target))
         observation_start = perf_counter()
         model.observe(features, target)
         observation_seconds += perf_counter() - observation_start
         total_seconds += perf_counter() - step_start
         if on_step is not None:
             on_step(position)
+    return (
+        predictions,
+        targets,
+        scores,
+        EvaluationTiming(total_seconds, prediction_seconds, observation_seconds),
+    )
+
+
+def evaluate_prequentially(
+    model: OnlineModel,
+    source: Iterable[tuple[np.ndarray, float]],
+    n_samples: int | None = None,
+    on_step: Callable[[int], None] | None = None,
+) -> PrequentialResult:
+    """Predict features before observing their target."""
+    predictions, targets, errors, timing = _evaluate_prequentially_loop(
+        model,
+        source,
+        n_samples,
+        on_step,
+        lambda prediction, target: (prediction - target) ** 2 if np.isfinite(prediction) else float("nan"),
+    )
     return PrequentialResult(
         np.asarray(predictions),
         np.asarray(targets),
         np.asarray(errors),
-        EvaluationTiming(total_seconds, prediction_seconds, observation_seconds),
+        timing,
     )
