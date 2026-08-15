@@ -80,15 +80,18 @@ fn main() -> Result<(), BRegressorError> {
 
 ## Benchmarks
 
-The included synthetic streaming-regression environment and prequential
-evaluation protocol compare `BRegressor` with `SGDLinearRegressor`, a Python
-SGD baseline with L2 weight decay. See the
-[synthetic drifting regression paper](papers/synthetic-drifting-regression/)
+The included synthetic streaming environments and prequential evaluation
+protocol compare `BRegressor` and `BClassifier` with linear and MLP baselines.
+See the
+[synthetic drifting streams paper](papers/synthetic-drifting-streams/)
 for the benchmark specification. Plotting support is optional:
 
 ```bash
 uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_regression.cli \
   --scenario python/binaml/benchmarks/synthetic_streaming_regression/scenarios/default.json
+
+uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_classification.cli \
+  --scenario python/binaml/benchmarks/synthetic_streaming_classification/scenarios/default.json
 ```
 
 ## Citation
