@@ -70,8 +70,11 @@ pub fn compact(graph: EphemeralGraph, output: BuildNodeId) -> Result<FunctionGra
             else {
                 continue;
             };
-            match simplify(resolve_id(first, &aliases), resolve_id(second, &aliases), truth_table)
-            {
+            match simplify(
+                resolve_id(first, &aliases),
+                resolve_id(second, &aliases),
+                truth_table,
+            ) {
                 SimplifyResult::Keep => {}
                 SimplifyResult::Constant(value) => {
                     slots[index] = Slot::Constant(value);
@@ -152,9 +155,7 @@ pub fn compact(graph: EphemeralGraph, output: BuildNodeId) -> Result<FunctionGra
         }
     }
 
-    let output = *old_to_new
-        .get(&output)
-        .ok_or(CompactError::InvalidOutput)?;
+    let output = *old_to_new.get(&output).ok_or(CompactError::InvalidOutput)?;
 
     Ok(FunctionGraph {
         source_indices,
@@ -252,7 +253,6 @@ mod tests {
     #[test]
     fn compaction_folds_truth_tables() {
         let graph = EphemeralGraph {
-            source_count: 1,
             nodes: vec![
                 EphemeralNode::Source { input_index: 0 },
                 EphemeralNode::Composed {

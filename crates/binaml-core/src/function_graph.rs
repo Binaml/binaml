@@ -25,9 +25,9 @@ impl FunctionGraph {
         let mut values = Vec::with_capacity(self.nodes.len());
         for node in &self.nodes {
             let value = match *node {
-                CompactNode::Source(source_index) => {
-                    *features.get(self.source_indices[source_index]).unwrap_or(&false)
-                }
+                CompactNode::Source(source_index) => *features
+                    .get(self.source_indices[source_index])
+                    .unwrap_or(&false),
                 CompactNode::Constant(value) => value,
                 CompactNode::Composed {
                     first,
@@ -40,11 +40,13 @@ impl FunctionGraph {
         values[self.output]
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn source_count(&self) -> usize {
         self.source_indices.len()
@@ -69,11 +71,7 @@ mod tests {
 
     #[test]
     fn evaluates_source_node() {
-        let function = graph(
-            vec![1],
-            vec![CompactNode::Source(0)],
-            0,
-        );
+        let function = graph(vec![1], vec![CompactNode::Source(0)], 0);
         assert!(function.evaluate(&[false, true]));
         assert!(!function.evaluate(&[true, false]));
     }

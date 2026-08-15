@@ -1,10 +1,10 @@
-use crate::{
-    compact, FunctionBuildConfig, FunctionBuilder, FunctionBuildError, FunctionGraph, SignBatch,
-};
 use crate::function_compact::CompactError;
+use crate::{
+    compact, FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
+};
 
 #[derive(Debug, Clone, Copy)]
-struct RegressorConfig {
+pub(crate) struct RegressorConfig {
     learning_rate: f64,
     l2: f64,
     sgd_steps: usize,
@@ -139,11 +139,7 @@ impl BRegressor {
         Ok(self.prediction_from_values(&self.evaluate_functions(features)))
     }
 
-    pub fn observe(
-        &mut self,
-        features: &[bool],
-        target: f64,
-    ) -> Result<(), BRegressorError> {
+    pub fn observe(&mut self, features: &[bool], target: f64) -> Result<(), BRegressorError> {
         self.validate_features(features)?;
         if !target.is_finite() {
             return Err(BRegressorError::NonFiniteTarget);

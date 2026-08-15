@@ -42,7 +42,6 @@ pub enum EphemeralNode {
 
 #[derive(Debug, Clone)]
 pub struct EphemeralGraph {
-    pub(crate) source_count: usize,
     pub(crate) nodes: Vec<EphemeralNode>,
     pub(crate) layers: Vec<Vec<BuildNodeId>>,
 }
@@ -65,7 +64,6 @@ impl FunctionBuilder {
 
         let source_count = batch.feature_columns.len();
         let mut graph = EphemeralGraph {
-            source_count,
             nodes: Vec::new(),
             layers: vec![Vec::new()],
         };
