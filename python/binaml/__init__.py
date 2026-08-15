@@ -8,7 +8,12 @@ from .environments import (
 from .evaluation import evaluate_prequentially
 
 __version__ = version("binaml")
-_MODEL_EXPORTS = {"BRegressor", "MLPRegressor", "OnlineModel", "SGDLinearRegressor"}
+_MODEL_EXPORTS = {
+    "BRegressor",
+    "MLPRegressor",
+    "OnlineModel",
+    "SGDLinearRegressor",
+}
 
 
 def __getattr__(name: str):

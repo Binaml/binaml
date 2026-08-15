@@ -96,7 +96,8 @@ Binaml focuses on continual learning models over streams of binary features
 subject to data drift.  Binary features provide a task-agnostic representation
 and enable models optimized for memory, latency, and energy efficiency.  This
 paper specifies Binaml's current regression model, \texttt{BRegressor}, as an
-initial task-specific instantiation.  It adapts online rather than relying on a
+ensemble of batch-learned boolean functions with scalar weights rather than a
+monolithic growing feature store.  It adapts online rather than relying on a
 stationary train/serve assumption and learns compact compositional
 representations from residual feedback.  The model is environment-agnostic: it
 does not depend on how the stream is produced.  This paper specifies the
@@ -108,19 +109,15 @@ versioned synthetic streams.
 \begin{description}
   \item[$d,x_t,y_t$] Input width, binary input, and scalar regression target.
   \item[$\hat y_t,e_t,s_t$] Prediction, residual, and residual-sign label.
-  \item[$b,w_r,\eta,\lambda$] Intercept, coefficient of feature id $r$, learning
-  rate, and $\ell_2$ decay.
-  \item[$r=(\ell,j)$] Feature id with store layer $\ell$ and index $j$.
-  \item[$\varphi_r,\psi_r,\mathcal L$] Boolean value, centered value, and live
-  feature set for feature id $r$.
+  \item[$b,w_k,\eta,\lambda$] Intercept, ensemble weight of function $k$,
+  learning rate, and $\ell_2$ decay.
+  \item[$f_k(x)$] Stored boolean function $k$ mapping $\{0,1\}^d$ to
+  $\{0,1\}$, stored as a compact boolean function.
   \item[$T\in\{0,\ldots,15\}$] Four-bit truth table of an arity-2 composed
-  feature.
-  \item[$r_0,r_1$] Ordered input feature ids of a composed feature.
-  \item[$B,S,n,K$] Feature-learning batch size, SGD steps per observation,
-  feature-batch index, and parent top-$K$ width.
-  \item[$C_{\ell},V_{\ell},L$] Live capacity per learned layer, candidate
-  capacity per layer, and maximum learned-layer depth.
-  \item[$\sigma(r),\tilde\sigma(r)$] Match score and propagated pruning score.
+  node.
+  \item[$B,S,n,K,L_{\max},K_{\max}$] Feature batch size, SGD steps per
+  observation, batch index, parent top-$K$ width, maximum builder depth, and
+  ensemble capacity.
 \end{description}
 
 \section{Model}
@@ -128,80 +125,50 @@ At time $t$, the model receives $x_t\in\{0,1\}^d$ and later observes a finite
 scalar $y_t$.  If useful signal is sparse weighted boolean structure over bits,
 a linear head over learned boolean indicators is a direct hypothesis class:
 continuous amplitudes, discrete features, and an inspectable composition.
-Let $\mathcal L$ be the current set of live feature ids.
-The prediction is
+Let $K_t$ be the number of stored functions after batch finalizations through
+time $t$.  The prediction is
 \[
 \hat y_t
 =
 b
 +
-\sum_{r\in\mathcal L}
-w_r\,\psi_r(x_t),
+\sum_{k=1}^{K_t}
+w_k\,\bigl(2f_k(x_t)-1\bigr),
 \]
-where $b\in\mathbb R$, each $w_r\in\mathbb R$, and each
-$\varphi_r(x_t)\in\{0,1\}$ is centered before entering the linear head:
+where $b\in\mathbb R$, each $w_k\in\mathbb R$, and each
+$f_k(x_t)\in\{0,1\}$ is centered before entering the linear head:
 \[
-\psi_r(x_t)=2\varphi_r(x_t)-1\in\{-1,1\}.
+2f_k(x_t)-1\in\{-1,1\}.
 \]
-
-\paragraph{Layer zero.}
-Input coordinates have feature ids
-$r=(0,j)$ for $j\in\{0,\ldots,d-1\}$, with
-\[
-\varphi_{(0,j)}(x)=x_j.
-\]
-Their initial coefficients are zero.
+Each $f_k$ is a compact boolean function built from one residual-sign batch,
+not a node in a shared graph.
 
 \paragraph{Composed features.}
 Composition starts from the most basic nontrivial boolean learning unit:
 two-input tables.  Combining them yields richer features without beginning
-from high-arity search.  A composed feature combines two input features
-$(r_0,r_1)$ using a four-bit truth table $T\in\{0,\ldots,15\}$.
+from high-arity search.  A composed node combines two parent activations using
+a four-bit truth table $T\in\{0,\ldots,15\}$.
 
-\section{Feature representation and storage}
-Depth is the natural complexity axis for feature composition: it bounds how
-far candidates look, keeps evaluation a DAG walk, and makes capacity control
-per depth band.  The store layer of a composed feature is
-\[
-\ell(r)=1+\max\bigl(\ell(r_0),\ell(r_1)\bigr).
-\]
-Layer zero holds the $d$ source features.  Each learned layer
-$\ell\geq 1$ maintains two collections:
-\begin{description}
-  \item[Live] Optionally occupied slots of composed features.  Indices are
-  stable; pruned slots become tombstones and are no longer live feature ids.
-  \item[Candidates] Candidate features trained on the current batch and not yet
-  admitted to the live set.
-\end{description}
-A candidate insert requires ordered distinct inputs $r_0<r_1$, valid live or
-source parents, and the correct derived layer.  The store permits multiple
-features with the same parent pair, allowing truth tables learned on different
-batches to coexist.  Newly promoted live coefficients start at zero.  After
-promote or prune, coefficients of dead feature ids are dropped and missing
-live feature ids receive weight zero.
+\section{Feature representation and batch learning}
+Each feature batch grows an ephemeral wide DAG: layer zero holds the $d$ source
+bits; at each subsequent layer the builder forms every distinct pair among the
+top-$K$ parent nodes by in-sample match score, learns a truth table on the
+current batch, and appends the resulting node.  Depth never exceeds $L_{\max}$.
+When the batch fills, the builder selects one output node by descending
+in-sample accuracy, then depth, then node id, compacts the subgraph into a
+\texttt{FunctionGraph}, and appends it to the ensemble with weight zero.  If the
+ensemble exceeds capacity $K_{\max}$, the function with smallest
+$|w_k|$ is removed, breaking ties toward the oldest index.  There is no
+hold-out batch and no shared candidate queue across batches.
 
-\subsection{Runtime layout}
-The implementation separates stable feature identity from compact evaluation.
-Each id is the pair \texttt{FeatureId(layer, index)}.  Source scores occupy one
-contiguous vector.  Learned layers occupy a vector of layer records; each
-record has a live vector of optional feature records and a candidate vector.
-An absent live entry is a tombstone, so pruning does not renumber an id that a
-later feature may reference.  A feature record stores two parent ids, one
-four-bit \texttt{u8} truth table, and one \texttt{u8} match score.  The eight
-\texttt{u8} counters used to learn a table cover every
-$(u,v,s)\in\{0,1\}^3$ combination, which limits the feature-learning batch
-size to 255.
-
-Before evaluation, the live store is flattened in layer order into a
-\texttt{FeatureLayout}: one vector of feature ids and one same-length vector of
-nodes.  A source node stores its input coordinate; a composed node stores the
-two already evaluated node positions and its truth table.  Thus each input is
-evaluated in one forward topological pass.  During \texttt{observe}, the current
-sample's activation row is computed once and reused for $S$ linear updates.
-Feature learning accumulates residual signs over non-overlapping batches of $B$
-binary inputs.  Coefficients are kept separately in a map from feature id to
-\texttt{f64}; after each structural update, tombstoned weights are removed and
-new live ids receive weight zero.
+\subsection{Compact evaluation}
+A stored \texttt{FunctionGraph} lists source indices and composed nodes in
+topological order.  Each node is either a source coordinate, a constant, or a
+composed operation referencing two already evaluated positions and one four-bit
+truth table.  One forward pass evaluates $f_k(x)$ for prediction and SGD.
+The eight \texttt{u8} counters used to learn a table cover every
+$(u,v,s)\in\{0,1\}^3$ combination, which limits the feature batch size to
+$B\leq255$.
 
 \begin{center}
 \scriptsize
@@ -209,31 +176,29 @@ new live ids receive weight zero.
 \hline
 \textbf{Type} & \textbf{Fields or representation} & \textbf{Role} \\
 \hline
-\texttt{FeatureId} & \texttt{\{layer: usize, index: usize\}} & stable source or learned-feature identity \\
-\texttt{Feature} & \texttt{\{inputs: [FeatureId; 2], truth\_table: u8, score: u8\}} & composed boolean feature and pruning score \\
-\texttt{FeatureLayer} & \texttt{\{live: Vec<Option<Feature>>, candidates: Vec<Feature>\}} & one learned depth band; empty live slots are tombstones \\
-\texttt{FeatureStore} & \texttt{\{source\_scores: Vec<u8>, layers: Vec<FeatureLayer>\}} & owns all source, live, and candidate features \\
-\texttt{FeatureLearningConfig} & \texttt{\{batch\_size, parent\_top\_k, features\_per\_layer, candidate\_capacity, max\_layers\}} & feature-search limits and parent-selection width \\
-\texttt{FeatureLearner} & \texttt{\{config, store, has\_previous\_batch: bool\}} & scores, promotes, prunes, and generates features \\
-\texttt{FeatureLayout} & \texttt{\{references: Vec<FeatureId>, nodes: Vec<FeatureNode>\}} & compact layer-ordered evaluation plan \\
-\texttt{FeatureNode} & \texttt{Source(usize)} or \texttt{Composed\{first: usize, second: usize, truth\_table: u8\}} & source coordinate or compiled composed operation \\
-\texttt{BRegressor} & learner, coefficient \texttt{HashMap<FeatureId, f64>}, intercept \texttt{f64}, feature-batch buffers, layout, count & online model state \\
+\texttt{FunctionBuildConfig} & \texttt{\{batch\_size, parent\_top\_k, max\_layers\}} & batch-local graph growth limits \\
+\texttt{FunctionBuilder} & stateless builder & grows ephemeral DAG from one \texttt{SignBatch} \\
+\texttt{FunctionGraph} & sources, compact nodes, output index & immutable stored function \\
+\texttt{CompactNode} & \texttt{Source}, \texttt{Constant}, or \texttt{Composed\{first, second, truth\_table\}} & one evaluation step \\
+\texttt{BRegressor} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<f64>}, intercept, batch buffers, count & online ensemble state \\
 \hline
 \end{tabular}
 \end{center}
 
 \section{Online linear-head updates}
-Composed-feature identity is discrete; coefficients are continuous, so the two
-are updated separately.  For each observation $(x_t,y_t)$, evaluate the current
-live features once, compute the residual sign with the current coefficients,
-then perform $S$ single-sample squared-error gradient steps on that activation
-row.  For one such step with pre-step residual $e_t=y_t-\hat y_t$,
-learning rate $\eta>0$, and decay $\lambda\geq 0$, apply
+Function identity is discrete; weights are continuous, so the two are updated
+separately.  For each observation $(x_t,y_t)$, evaluate the current stored
+functions once, compute the residual sign with the current weights, then
+perform $S$ single-sample squared-error gradient steps on that activation row.
+The newly appended function at a batch boundary is excluded from SGD on the
+batch-fill step because it is added only after those updates.  For one such
+step with pre-step residual $e_t=y_t-\hat y_t$, learning rate $\eta>0$, and
+decay $\lambda\geq 0$, apply
 \begin{align*}
-w_r &\leftarrow (1-\eta\lambda)\,w_r
-&&\text{for all live }r,\\
+w_k &\leftarrow (1-\eta\lambda)\,w_k
+&&\text{for all stored }k,\\
 b &\leftarrow b+\eta e_t,\\
-w_r &\leftarrow w_r+\eta e_t\psi_r(x_t).
+w_k &\leftarrow w_k+\eta e_t\bigl(2f_k(x_t)-1\bigr).
 \end{align*}
 There is no gradient through boolean structure: SGD tracks residual amplitude
 at the sample level, while structure search runs when enough residual-sign
@@ -241,17 +206,16 @@ evidence exists.  The residual sign
 \[
 s_t=\mathbf{1}\{e_t\geq 0\}
 \]
-is computed with the current coefficients before the associated linear updates
-and appended to the current feature-learning batch.  After every $B$ new
-observations, that batch is consumed for feature learning and cleared.
+is computed with the current weights before the associated linear updates and
+appended to the current feature batch.  After every $B$ new observations, that
+batch is consumed to grow, select, compact, and append one function, then
+cleared.
 
 \section{Residual-sign supervision and batching}
 Feature learning targets residual signs, not $y_t$ itself.  Residual signs are
-a binary supervision bit for the discrete learner, while the linear head
-absorbs magnitude---simple parts combined, not one joint high-complexity
-update.  Exact truth-table counting needs a bounded window; batching amortizes
-candidate search and gives a natural train/hold-out split across successive
-windows.  Batch $n$ is
+a binary supervision bit for the discrete builder, while the linear head absorbs
+magnitude.  Exact truth-table counting needs a bounded window; batching
+amortizes graph growth.  Batch $n$ is
 \[
 \mathcal B_n
 =
@@ -259,26 +223,16 @@ windows.  Batch $n$ is
 \qquad |I_n|=B,
 \]
 where $I_n$ is the contiguous block of $B$ observations since the previous
-structural update.
-Processing $\mathcal B_n$ has three phases when a previous batch exists:
-\begin{enumerate}
-  \item Score every source, live feature, and candidate on
-  $\mathcal B_n$ by match count against residual signs.
-  \item Promote every candidate into live, then prune each learned
-  layer to capacity $C_{\ell}$.
-  \item Learn new candidates on $\mathcal B_n$.
-\end{enumerate}
-On the first batch only the candidate-learning phase runs.  Candidates trained
-on $\mathcal B_n$ therefore receive their first scores on $\mathcal B_{n+1}$
-before promotion: a one-batch hold-out across successive residual-sign
-windows.
+structural update.  Processing $\mathcal B_n$ grows an ephemeral graph, selects
+one output by in-sample accuracy, compacts it, appends $(f,w=0)$ to the
+ensemble, and prunes to $K_{\max}$ if needed.  There is no hold-out batch.
 
 \paragraph{Match score.}
 For a boolean stream $z_{1:B}$ and residual signs $s_{1:B}$,
 \[
 \sigma=\sum_{i=1}^{B}\mathbf{1}\{z_i=s_i\}.
 \]
-Sources use their coordinate columns; composed features use their evaluated
+Sources use their coordinate columns; composed nodes use their evaluated
 bitstreams.
 
 \section{Truth-table learning}
@@ -291,39 +245,23 @@ the frequencies needed to select each table output by majority, with ties
 resolving to zero.  As one counter may receive every observation, the
 \texttt{u8} counters bound the admissible batch size to $B\leq255$.
 
-\section{Candidate feature generation}
-For each layer $\ell=1,\ldots,L$, while candidate capacity $V_{\ell}$ remains:
+\section{Batch graph growth}
+For each layer $\ell=1,\ldots,L_{\max}$:
 \begin{enumerate}
-  \item Let $P$ be the top-$K$ live feature ids in layer $\ell-1$ by match
-  score, breaking ties by feature-id order.
-  \item Form every distinct pair $\{r_a,r_b\}\subset P$, written with
-  $r_0<r_1$.
-  \item For each pair, learn a truth table on the current batch and insert it
-  into candidates with initial score zero, stopping if candidate capacity is
-  reached.  A pair may produce a new candidate even when that pair already
-  appears in the layer.
+  \item Let $P$ be the top-$K$ nodes in layer $\ell-1$ by in-sample match
+  score, breaking ties by node id.
+  \item Form every distinct pair in $P$.
+  \item For each pair, learn a truth table on $\mathcal B_n$ and append the
+  resulting composed node to layer $\ell$.
 \end{enumerate}
-If $P$ has fewer than two feature ids, layer $\ell$ is skipped.
-Layer depth never exceeds $L$.
+If $P$ has fewer than two nodes, layer $\ell$ is skipped.  After all layers, the
+builder selects the output node by descending match score, then depth, then id.
 
-\section{Feature promotion and pruning}
-After scoring on the following batch, every candidate at each learned layer is
-appended to that layer's live list.  A parent can look weak alone yet be
-required by useful children, so pruning uses max-with-descendants scores.
-If a layer then exceeds capacity $C_{\ell}$, live feature ids are sorted by
-ascending propagated score
-\[
-\tilde\sigma(r)
-=
-\max\!\Bigl(
-\sigma(r),\;
-\max_{r'\in\mathrm{children}(r)}\tilde\sigma(r')
-\Bigr),
-\]
-where $\mathrm{children}(r)$ are live features that take $r$ as an input, and
-ties break by feature-id order.  The lowest
-$|\mathrm{live}|-C_{\ell}$ feature ids are tombstoned.  Tombstoning cascades
-to all dependents, so no live feature retains a dead parent.
+\section{Ensemble pruning}
+When appending a new function would exceed $K_{\max}$, remove the stored index
+with smallest $|w_k|$, breaking ties toward the oldest index.  Zero-weight
+experts can therefore rotate at capacity even when still structurally useful on
+past batches.
 
 \section{Online learning procedure}
 \noindent\textbf{Configuration}
@@ -331,36 +269,30 @@ to all dependents, so no live feature retains a dead parent.
   \item[\textbf{Linear}] Learning rate $\eta$, decay $\lambda$, and $S$ SGD
   steps per observation.
   \item[\textbf{Batch structure}] Feature batch size $B$, parent top-$K$ width
-  $K$, per-layer live capacity $C_{\ell}$, candidate capacity $V_{\ell}$,
-  and maximum depth $L$.
+  $K$, maximum builder depth $L_{\max}$, and ensemble capacity $K_{\max}$.
 \end{description}
 
-\noindent\textbf{Initialize:} empty learned layers, $b\leftarrow 0$,
-$w_{(0,j)}\leftarrow 0$ for all source indices, and empty feature-batch
-buffers.
+\noindent\textbf{Initialize:} empty ensemble, $b\leftarrow 0$, and empty
+feature-batch buffers.
 
 \noindent\textbf{For} each observation $(x_t,y_t)$:
 \begin{enumerate}
   \item Validate the input width and finite target.
-  \item Evaluate live $\varphi_r(x_t)$ through the current layout and predict
-  $\hat y_t=b+\sum_{r\in\mathcal L}w_r\psi_r(x_t)$.
+  \item Evaluate stored $f_k(x_t)$ and predict
+  $\hat y_t=b+\sum_k w_k(2f_k(x_t)-1)$.
   \item Compute $s_t=\mathbf{1}\{y_t-\hat y_t\geq 0\}$ and append $(x_t,s_t)$
   to the current feature batch.
-  \item Apply $S$ single-sample linear updates using the current activation
-  row.
-  \item After $B$ accumulated observations, score the previous candidates,
-  promote and prune live features, generate candidates from the current
-  residual-sign batch, synchronize coefficients, rebuild the layout, and clear
-  the feature batch.
+  \item Apply $S$ single-sample linear updates using the current activation row.
+  \item After $B$ accumulated observations, grow a graph on the batch, select and
+  compact one output, append it with weight zero, prune to $K_{\max}$ if needed,
+  and clear the feature batch.
 \end{enumerate}
 
 \paragraph{Cost.}
-Prediction and activation evaluation are linear in the number of live source
-and composed features.  Each linear step costs one live-feature count.
-Structural work occurs once per feature batch: candidate table learning scans
-each selected parent pair over $B$ rows, while pruning recursively scans later
-layers to preserve a useful descendant's parents.  The design trades occasional
-tombstones for stable ids and bounded live and candidate capacity per layer.
+Prediction and activation evaluation are linear in the number of stored
+functions and their node counts.  Each linear step costs one function count.
+Structural work occurs once per feature batch: graph growth scans selected
+parent pairs over $B$ rows, then compaction produces one stored function.
 
 \section{API and integration boundaries}
 The \texttt{binaml.models} package owns the online model and has no
@@ -379,8 +311,8 @@ For each emitted $(x_t,y_t)$, an evaluator first records the model
 prediction, then exposes the target through \texttt{observe}.  Mean squared
 error is computed from the recorded pre-update predictions.  Structure
 updates occur only after a full feature batch fills inside \texttt{observe};
-residual signs are measured with the current coefficients before the
-corresponding linear updates.
+residual signs are measured with the current weights before the corresponding
+linear updates.
 Hyperparameters, implementation version, and the online protocol are required
 to interpret any reported trajectory.
 
@@ -392,12 +324,11 @@ $\{0,1,2,3,4\}$ with 32 input bits,
 function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 
-All models receive the scenario width.  The feature regressor uses learning
-rate $\eta=10^{-3}$, $\ell_2$ decay $10^{-4}$, feature batch size $B=32$,
-three single-sample SGD steps, parent top-$K=8$, 32 live features per learned
-layer, candidate capacity 32, and depth two.  Every source and composed
-activation enters the linear head as $2\varphi_r(x)-1$, and candidate pairs are
-distinct members of the top-$K$ previous layer only.  The linear baseline is a
+All models receive the scenario width.  \texttt{BRegressor} uses learning rate
+$\eta=5\times10^{-3}$, $\ell_2$ decay $10^{-4}$, feature batch size $B=16$,
+five single-sample SGD steps, parent top-$K=8$, builder depth
+$L_{\max}=3$, and ensemble capacity $K_{\max}=64$.  Each stored function
+enters the linear head as $2f_k(x)-1$.  The linear baseline is a
 Python+NumPy replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
 baseline is a Scikit-learn wrapper using replay size 32 and three
@@ -419,7 +350,7 @@ the prequential predict-plus-observe time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $\boldsymbol{0.494\pm0.022}$ & $\boldsymbol{0.702\pm0.015}$ & $\boldsymbol{0.274\pm0.053}$ \\
+BRegressor (ours) & $\boldsymbol{0.408\pm0.018}$ & $\boldsymbol{0.639\pm0.014}$ & $\boldsymbol{0.064\pm0.012}$ \\
 Linear SGD (Python+NumPy) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
 MLP SGD (Scikit-learn) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
 \hline
@@ -427,8 +358,11 @@ MLP SGD (Scikit-learn) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
 \end{center}
 
 \section{Limitations and scope}
-This document specifies the feature regressor used by Binaml.  It does not
-claim optimality of residual-sign learning.  The reported comparison is
-limited to the versioned synthetic task, fixed configurations, and
-reproducible baseline runs described above.
+This document specifies the ensemble regressor used by Binaml.  It does not
+claim optimality of residual-sign learning or in-sample function selection.
+Ensemble churn at capacity can drop zero-weight experts that remain useful on
+past batches; in-sample output selection trades hold-out promotion for simpler
+batch boundaries.  The reported comparison is limited to the versioned
+synthetic task, fixed configurations, and reproducible baseline runs described
+above.
 \end{document}

@@ -7,14 +7,13 @@ optimized for memory, latency, and energy efficiency.
 
 ## Core concepts
 
-Binaml starts with input bits and builds richer features by composing pairs of
+Binaml starts with input bits and learns boolean functions by composing pairs of
 Boolean features. Each composition is one of the 16 Boolean functions of arity
-two, represented as a four-bit truth table. Repeated composition forms layered,
-inspectable Boolean feature graphs.
+two, represented as a four-bit truth table. Repeated composition yields richer,
+inspectable boolean functions.
 
-A linear model combines the resulting features and adapts online to drift.
-`BRegressor` is the current Binaml model, combining online SGD with
-residual-learned composed Boolean features.
+`BRegressor` is the current Binaml model: an online ensemble of batch-learned
+boolean functions, each with a scalar weight, updated by residual-sign SGD.
 
 See the [Binaml paper](papers/binaml/) for the model specification.
 
@@ -66,7 +65,7 @@ use binaml_core::{BRegressor, BRegressorError};
 
 fn main() -> Result<(), BRegressorError> {
     let mut model = BRegressor::with_hyperparameters(
-        2, 0.03, 1e-4, 32, 3, 8, 32, 32, 2,
+        2, 5e-3, 1e-4, 16, 5, 8, 3, 64,
     )?;
 
     for (features, target) in [([false, true], 1.0), ([true, false], 0.0)] {

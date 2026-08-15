@@ -2,6 +2,26 @@
 
 All notable changes to Binaml are documented here.
 
+## [Unreleased]
+
+### Added
+- Internal function-learning pipeline: `FunctionBuilder`, ephemeral-to-compact
+  lowering, and immutable `FunctionGraph` storage for learned boolean functions.
+- `BRegressor.function_count` and `BRegressor.weight()` Python accessors.
+- Unit tests for `FunctionGraph` evaluation (sources, constants, composed gates,
+  missing features, output selection).
+
+### Changed
+- **Breaking:** `BRegressor` now uses a function-ensemble architecture instead
+  of a shared growing feature store. Removed `features_per_layer` and
+  `candidate_capacity`. Added `max_functions`. Default hyperparameters updated.
+- Binaml paper, README, and benchmark model config updated for the
+  function-ensemble model.
+
+### Removed
+- Shared-graph `FeatureStore` / `FeatureLearner` implementation.
+- `FunctionEnsembleRegressor` (merged into `BRegressor`).
+
 ## [0.1.0-alpha.2] - 2026-08-12
 
 ### Changed

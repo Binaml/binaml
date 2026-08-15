@@ -1,8 +1,8 @@
 # Binaml Core
 
-The target-neutral Rust implementation of composed-feature learning for online
+The target-neutral Rust implementation of online boolean-function ensemble
 regression. Its supported public interface is `BRegressor` and
-`BRegressorError`; feature storage and truth-table machinery are
+`BRegressorError`; graph building, compaction, and truth-table machinery are
 internal implementation details.
 
 `binaml-core` is designed to support future server, embedded, and C-ABI crates
