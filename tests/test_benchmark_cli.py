@@ -1,4 +1,5 @@
 import json
+import sys
 
 import numpy as np
 import pytest
@@ -6,6 +7,7 @@ from binaml.benchmarks.synthetic_streaming_regression.cli import (
     _load_model_config,
     _record,
     _warmup_samples,
+    main as regression_main,
 )
 from binaml.evaluation import EvaluationTiming, PrequentialResult
 from binaml.models import SGDLinearRegressor
@@ -81,3 +83,71 @@ def test_warmup_must_be_a_non_negative_prefix(warmup_samples) -> None:
 def test_warmup_must_be_an_integer(warmup_samples) -> None:
     with pytest.raises(TypeError, match="warmup_samples"):
         _warmup_samples({"n_samples": 10, "warmup_samples": warmup_samples})
+
+
+def _tiny_regression_scenario(tmp_path) -> object:
+    path = tmp_path / "scenario.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "schema_version": 2,
+                "n_samples": 4,
+                "warmup_samples": 0,
+                "seeds": [0],
+                "environment": {"schema_version": 2, "n_features": 3, "n_functions": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_cli_skips_plots_by_default(tmp_path, monkeypatch) -> None:
+    scenario = _tiny_regression_scenario(tmp_path)
+    output_dir = tmp_path / "run"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli",
+            "--scenario",
+            str(scenario),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "binaml.models:SGDLinearRegressor",
+        ],
+    )
+    regression_main()
+    assert not (output_dir / "plots").exists()
+    config = json.loads((output_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["plots"] is False
+    result = json.loads(next((output_dir / "results").rglob("*.json")).read_text(encoding="utf-8"))
+    assert "update" in result["timing_seconds"]
+    assert "observation" not in result["timing_seconds"]
+
+
+def test_cli_writes_plots_when_requested(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("seaborn")
+    scenario = _tiny_regression_scenario(tmp_path)
+    output_dir = tmp_path / "run"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cli",
+            "--scenario",
+            str(scenario),
+            "--output-dir",
+            str(output_dir),
+            "--model",
+            "binaml.models:SGDLinearRegressor",
+            "--plots",
+        ],
+    )
+    regression_main()
+    assert (output_dir / "plots").is_dir()
+    assert any((output_dir / "plots").glob("*.png"))
+    config = json.loads((output_dir / "config.json").read_text(encoding="utf-8"))
+    assert config["plots"] is True

@@ -89,7 +89,7 @@ jobs:
       - name: Test installed sdist outside checkout
         working-directory: ${{ runner.temp }}
         run: |
-          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
+          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.update(1.0)"
       - uses: actions/upload-artifact@v7
         with:
           name: sdist
@@ -135,7 +135,7 @@ jobs:
       - name: Test installed wheel outside checkout
         working-directory: ${{ runner.temp }}
         run: |
-          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.observe(np.array([0, 1], dtype=np.uint8), 1.0)"
+          python -c "import numpy as np; from binaml import BRegressor; model = BRegressor(n_features=2); model.predict(np.array([0, 1], dtype=np.uint8)); model.update(1.0)"
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.platform }}-py${{ matrix.python }}

@@ -6,12 +6,12 @@ import numpy as np
 
 from binaml._core import BClassifierCore
 
-from .base import PredictObserveState, validate_binary_features, validate_class_index
+from .base import PredictUpdateState, validate_binary_features, validate_class_index
 
 DEFAULT_LEARNING_RATE = 0.016
 
 
-class BClassifier(PredictObserveState):
+class BClassifier(PredictUpdateState):
     """Online multiclass classification over an ensemble of batch-learned boolean functions."""
 
     def __init__(
@@ -68,12 +68,11 @@ class BClassifier(PredictObserveState):
         self._begin_predict()
         return int(self._model.predict(values))
 
-    def observe(self, features: np.ndarray, target: int) -> None:
-        self._begin_observe()
-        values = validate_binary_features(features, self.n_features)
+    def update(self, target: int) -> None:
+        self._begin_update()
         target_value = validate_class_index(target, self.n_classes)
-        self._finish_observe()
-        self._model.observe(values, target_value)
+        self._model.update(target_value)
+        self._finish_update()
 
     @property
     def n_observed(self) -> int:

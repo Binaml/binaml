@@ -1,4 +1,4 @@
-"""Predict-then-observe evaluation for online classifiers."""
+"""Predict-then-update evaluation for online classifiers."""
 
 from __future__ import annotations
 
@@ -37,14 +37,16 @@ def evaluate_prequentially_classification(
     source: Iterable[tuple[np.ndarray, int]],
     n_samples: int | None = None,
     on_step: Callable[[int], None] | None = None,
+    warmup_samples: int = 0,
 ) -> PrequentialClassificationResult:
-    """Predict features before observing their label."""
+    """Predict features before updating with their label."""
     predictions, targets, correct, timing = _evaluate_prequentially_loop(
         model,
         source,
         n_samples,
         on_step,
         lambda prediction, target: prediction == target,
+        warmup_samples,
     )
     return PrequentialClassificationResult(
         np.asarray(predictions, dtype=np.int64),

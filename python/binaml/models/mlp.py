@@ -1,58 +1,66 @@
-"""Replay-batch scikit-learn MLP baseline."""
+"""Replay-batch JAX MLP baseline."""
 
 from __future__ import annotations
 
-from .sklearn_mlp import SklearnMLPOnlineModel
+from collections.abc import Sequence
+
+from .jax.replay import ReplayJAXModel
 
 
-class MLPRegressor(SklearnMLPOnlineModel):
-    """Online wrapper around scikit-learn's SGD MLP regressor."""
+def _hidden_layer_sizes(value: int | Sequence[int]) -> tuple[int, ...]:
+    if isinstance(value, bool):
+        raise ValueError("invalid hidden_layer_sizes")
+    if isinstance(value, int):
+        sizes = (value,)
+    else:
+        sizes = tuple(value)
+    if not sizes or any(
+        isinstance(size, bool) or not isinstance(size, int) or size < 1 for size in sizes
+    ):
+        raise ValueError("invalid hidden_layer_sizes")
+    return sizes
+
+
+class MLPRegressor(ReplayJAXModel):
+    """Online MLP regressor with full-batch replay SGD updates."""
 
     def __init__(
         self,
         n_features: int,
+        hidden_layer_sizes: int | Sequence[int] = (50,),
+        learning_rate: float = 0.003,
+        alpha: float = 1e-4,
         batch_size: int = 32,
         sgd_steps: int = 3,
-        hidden_layer_sizes: int | tuple[int, ...] = (50,),
-        activation: str = "relu",
-        alpha: float = 0.0001,
-        learning_rate: str = "constant",
-        learning_rate_init: float = 0.003,
-        power_t: float = 0.5,
-        shuffle: bool = True,
         random_state: int | None = 0,
-        tol: float = 0.0001,
-        verbose: bool = False,
-        momentum: float = 0.0,
-        nesterovs_momentum: bool = False,
-        early_stopping: bool = False,
-        validation_fraction: float = 0.1,
-        beta_1: float = 0.9,
-        beta_2: float = 0.999,
-        epsilon: float = 1e-8,
-        n_iter_no_change: int = 10,
     ) -> None:
+        if random_state is not None and (
+            isinstance(random_state, bool) or not isinstance(random_state, int)
+        ):
+            raise ValueError("invalid random_state")
+        try:
+            from .jax.losses import mse
+            from .jax.mlp import init_mlp, mlp_forward
+        except ImportError as error:
+            raise ImportError(
+                "MLPRegressor requires JAX; install binaml[benchmarks]"
+            ) from error
+        sizes = _hidden_layer_sizes(hidden_layer_sizes)
+        params, mask = init_mlp(n_features, sizes, 1, random_state)
         super().__init__(
             n_features,
+            1,
+            learning_rate,
+            alpha,
+            False,
             batch_size,
             sgd_steps,
-            n_classes=None,
-            hidden_layer_sizes=hidden_layer_sizes,
-            activation=activation,
-            alpha=alpha,
-            learning_rate=learning_rate,
-            learning_rate_init=learning_rate_init,
-            power_t=power_t,
-            shuffle=shuffle,
-            random_state=random_state,
-            tol=tol,
-            verbose=verbose,
-            momentum=momentum,
-            nesterovs_momentum=nesterovs_momentum,
-            early_stopping=early_stopping,
-            validation_fraction=validation_fraction,
-            beta_1=beta_1,
-            beta_2=beta_2,
-            epsilon=epsilon,
-            n_iter_no_change=n_iter_no_change,
+            params,
+            mask,
+            mlp_forward,
+            mse,
+            invalid_config_message="invalid regressor configuration",
         )
+        self.hidden_layer_sizes = sizes
+        self.alpha = alpha
+        self.random_state = random_state

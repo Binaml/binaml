@@ -333,20 +333,21 @@ The \texttt{binaml.models} package owns the online models and has no
 environment dependency: the goal is generic models, decoupled from where the
 data comes from and how it was produced.  The public surfaces are
 \texttt{BRegressor} and \texttt{BClassifier}, which implement
-\texttt{predict(features)} and \texttt{observe(features, target)} for binary
-feature vectors of width $d$.  The prediction call may retain pairing state;
-\texttt{observe} must follow a preceding \texttt{predict}.  Feature learning
-is internal to \texttt{observe} once a batch fills.  Evaluation packages
-compose models with environments through predict-then-observe prequential
+\texttt{predict(features)} and \texttt{update(target)} for binary
+feature vectors of width $d$.  The prediction call retains pairing state;
+\texttt{update} must follow a preceding \texttt{predict} and applies the
+revealed target to that stored step.  Feature learning
+is internal to \texttt{update} once a batch fills.  Evaluation packages
+compose models with environments through predict-then-update prequential
 evaluation.  Named benchmarks only compose these independent components.
 
 \section{Prequential evaluation protocol}
 For each emitted sample, an evaluator first records the model prediction, then
-exposes the target through \texttt{observe}.  Regression benchmarks compute
+exposes the target through \texttt{update}.  Regression benchmarks compute
 mean squared error from the recorded pre-update predictions; classification
 benchmarks compute accuracy from the recorded pre-update class predictions.
 Structure updates occur only after a full feature batch fills inside
-\texttt{observe}; residual signs are measured with the current head parameters
+\texttt{update}; residual signs are measured with the current head parameters
 before the corresponding updates.
 Hyperparameters, implementation version, and the online protocol are required
 to interpret any reported trajectory.
@@ -367,20 +368,16 @@ $\eta=5\times10^{-3}$, $\ell_2$ decay $10^{-4}$, feature batch size $B=16$,
 five single-sample SGD steps, parent top-$K=8$, builder depth
 $L_{\max}=3$, and ensemble capacity $K_{\max}=64$.  Each stored function
 enters the linear head as $2f_k(x)-1$.  The linear baseline is a
-Python+NumPy replay-batch implementation using learning rate $0.03$, the same
+JAX replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
-baseline is a Scikit-learn wrapper using replay size 32 and three
-\texttt{partial\_fit} passes; one 50-unit ReLU hidden layer; scikit-learn SGD
-with constant learning rate $0.003$, $\alpha=10^{-4}$,
-\texttt{power\_t}=0.5, shuffling enabled, random state zero, tolerance
-$10^{-4}$, zero momentum, no Nesterov momentum, and no early stopping.  Its
-remaining configured values are validation fraction $0.1$, $\beta_1=0.9$,
-$\beta_2=0.999$, $\epsilon=10^{-8}$, 10 no-change iterations, and disabled
-verbose output; the wrapper fixes one iteration and disables warm start.
+baseline is a JAX one-hidden-layer ReLU network using replay size 32 and three
+full-batch SGD steps; one 50-unit hidden layer; constant learning rate
+$0.003$, $\alpha=10^{-4}$, and random state zero.  Linear and MLP baselines
+share the same float32 replay SGD scaffold.
 
 Tables report the mean $\pm$ standard error over five seeds.  MSE is the
 optimized loss; RMSE expresses the same error in target units.  Total time is
-the prequential predict-plus-observe time for a 1,000-sample trajectory.
+the prequential predict-plus-update time for a 1,000-sample trajectory.
 
 \begin{center}
 \footnotesize
@@ -389,8 +386,8 @@ the prequential predict-plus-observe time for a 1,000-sample trajectory.
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
 BRegressor (ours) & $\boldsymbol{0.408\pm0.018}$ & $\boldsymbol{0.639\pm0.014}$ & $\boldsymbol{0.064\pm0.012}$ \\
-Linear SGD (Python+NumPy) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
-MLP SGD (Scikit-learn) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
+Linear SGD (JAX) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
+MLP SGD (JAX) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
 \hline
 \end{tabular}
 \end{center}

@@ -81,7 +81,7 @@ def run_scenario(
     for seed in scenario["seeds"]:
         trajectory = generate_trajectory(config, int(scenario["n_samples"]), int(seed), return_metadata=True)
         evaluations = {
-            name: evaluate_prequentially(factory(config.n_features), trajectory)
+            name: evaluate_prequentially(factory(config.n_features), trajectory, warmup_samples=warmup)
             for name, factory in model_factories.items()
         }
         for name, result in evaluations.items():
@@ -178,6 +178,7 @@ def main() -> None:
     model_source.add_argument("--model", action="append", default=[])
     model_source.add_argument("--model-config", type=Path, help="JSON model factory and parameter configuration")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--plots", action="store_true")
     args = parser.parse_args()
     if args.model_config:
         models, model_config = _load_model_config(args.model_config)
@@ -205,6 +206,7 @@ def main() -> None:
         "models": list(models),
         "model_config": entries,
         "warmup_samples": warmup,
+        "plots": args.plots,
     }
     (output_dir / "config.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     completed, failed = run_jobs(
@@ -231,7 +233,8 @@ def main() -> None:
         json.dumps({"schema_version": 2, "metrics": metrics}, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    _write_job_plots(output_dir, source_argument, source_path, completed, metrics)
+    if args.plots:
+        _write_job_plots(output_dir, source_argument, source_path, completed, metrics)
     print(json.dumps({"run_dir": str(output_dir), "completed_jobs": len(completed), "failed_jobs": len(failed)}, indent=2))
 
 

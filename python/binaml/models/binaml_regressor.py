@@ -6,12 +6,12 @@ import numpy as np
 
 from binaml._core import BRegressorCore
 
-from .base import PredictObserveState, validate_binary_features, validate_finite_float_target
+from .base import PredictUpdateState, validate_binary_features, validate_finite_float_target
 
 DEFAULT_LEARNING_RATE = 5e-3
 
 
-class BRegressor(PredictObserveState):
+class BRegressor(PredictUpdateState):
     """Online regression over an ensemble of batch-learned boolean functions."""
 
     def __init__(
@@ -62,12 +62,11 @@ class BRegressor(PredictObserveState):
         self._begin_predict()
         return float(self._model.predict(values))
 
-    def observe(self, features: np.ndarray, target: float) -> None:
-        self._begin_observe()
-        values = validate_binary_features(features, self.n_features)
+    def update(self, target: float) -> None:
+        self._begin_update()
         target_value = validate_finite_float_target(target)
-        self._finish_observe()
-        self._model.observe(values, target_value)
+        self._model.update(target_value)
+        self._finish_update()
 
     @property
     def intercept(self) -> float:

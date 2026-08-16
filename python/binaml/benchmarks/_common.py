@@ -14,7 +14,7 @@ from statistics import fmean, stdev
 
 def timing_payload(result: object) -> dict[str, float]:
     timing = result.timing_seconds  # type: ignore[attr-defined]
-    return {"total": timing.total, "prediction": timing.prediction, "observation": timing.observation}
+    return {"total": timing.total, "prediction": timing.prediction, "update": timing.update}
 
 
 def aggregate(values: list[float]) -> dict[str, float]:

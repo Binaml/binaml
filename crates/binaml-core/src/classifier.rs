@@ -5,6 +5,8 @@ pub enum BClassifierError {
     InvalidConfig,
     InvalidInput,
     InvalidTarget,
+    PendingPrediction,
+    NoPendingPrediction,
     Build,
     Compact,
 }
@@ -14,6 +16,8 @@ impl From<EnsembleError> for BClassifierError {
         match error {
             EnsembleError::InvalidConfig => Self::InvalidConfig,
             EnsembleError::InvalidInput => Self::InvalidInput,
+            EnsembleError::PendingPrediction => Self::PendingPrediction,
+            EnsembleError::NoPendingPrediction => Self::NoPendingPrediction,
             EnsembleError::Build => Self::Build,
             EnsembleError::Compact => Self::Compact,
         }
@@ -95,19 +99,16 @@ impl BClassifier {
             .and_then(|class_weights| class_weights.get(class_index).copied())
     }
 
-    pub fn predict(&self, features: &[bool]) -> Result<usize, BClassifierError> {
-        self.ensemble.validate_features(features)?;
-        Ok(self
-            .ensemble
-            .head
-            .predict(&self.ensemble.function_values(features)))
+    pub fn predict(&mut self, features: &[bool]) -> Result<usize, BClassifierError> {
+        let function_values = self.ensemble.begin_predict(features)?;
+        Ok(self.ensemble.head.predict(&function_values))
     }
 
-    pub fn observe(&mut self, features: &[bool], target: usize) -> Result<(), BClassifierError> {
+    pub fn update(&mut self, target: usize) -> Result<(), BClassifierError> {
         if target >= self.ensemble.head.n_classes {
             return Err(BClassifierError::InvalidTarget);
         }
-        self.ensemble.observe(features, target).map_err(Into::into)
+        self.ensemble.update(target).map_err(Into::into)
     }
 }
 
@@ -119,11 +120,16 @@ mod tests {
         BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 2, 1, max_functions).unwrap()
     }
 
+    fn step(model: &mut BClassifier, features: &[bool], target: usize) {
+        model.predict(features).unwrap();
+        model.update(target).unwrap();
+    }
+
     #[test]
     fn batch_fill_excludes_new_function_from_sgd() {
         let mut model = model(2, 8);
-        model.observe(&[false, false], 0).unwrap();
-        model.observe(&[true, false], 1).unwrap();
+        step(&mut model, &[false, false], 0);
+        step(&mut model, &[true, false], 1);
         assert_eq!(model.function_count(), 1);
         assert_eq!(model.weight(0, 0), Some(0.0));
     }
@@ -131,10 +137,10 @@ mod tests {
     #[test]
     fn ensemble_appends_every_batch() {
         let mut model = model(1, 3);
-        model.observe(&[false, true], 0).unwrap();
-        model.observe(&[true, false], 1).unwrap();
-        model.observe(&[false, false], 2).unwrap();
-        model.observe(&[true, true], 0).unwrap();
+        step(&mut model, &[false, true], 0);
+        step(&mut model, &[true, false], 1);
+        step(&mut model, &[false, false], 2);
+        step(&mut model, &[true, true], 0);
         assert_eq!(model.function_count(), 3);
     }
 }

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from .base import ReplaySGDModel
+from .jax.replay import ReplayJAXModel
 
 
-class SGDLinearRegressor(ReplaySGDModel):
+class SGDLinearRegressor(ReplayJAXModel):
     """Online linear regressor with full-batch replay SGD updates."""
 
     def __init__(
@@ -19,36 +19,36 @@ class SGDLinearRegressor(ReplaySGDModel):
         batch_size: int = 32,
         sgd_steps: int = 3,
     ) -> None:
+        try:
+            from .jax.linear import init_linear, linear_forward
+            from .jax.losses import mse
+        except ImportError as error:
+            raise ImportError(
+                "SGDLinearRegressor requires JAX; install binaml[benchmarks]"
+            ) from error
+        params, mask = init_linear(n_features, 1)
         super().__init__(
             n_features,
+            1,
             learning_rate,
             l2,
             center_binary_features,
             batch_size,
             sgd_steps,
+            params,
+            mask,
+            linear_forward,
+            mse,
             invalid_config_message="invalid regressor configuration",
         )
-        self.weights = np.zeros(n_features, dtype=np.float64)
-        self.intercept = 0.0
 
-    def _predict_from_features(self, values: np.ndarray) -> float:
-        return self.intercept + float(self._model_features(values) @ self.weights)
+    @property
+    def weights(self) -> np.ndarray:
+        return np.asarray(self.params["weights"]).reshape(self.n_features)
 
-    def _validate_target(self, target: float) -> float:
-        from .base import validate_finite_float_target
-
-        return validate_finite_float_target(target)
-
-    def _update_replay_batch(self) -> None:
-        features, targets = self._replay.arrays()
-        model_features = self._model_features(features)
-        errors = targets - (self.intercept + model_features @ self.weights)
-        rate = self.learning_rate
-        self.intercept += rate * float(np.mean(errors))
-        self.weights *= 1.0 - rate * self.l2
-        self.weights += rate * np.mean(errors[:, None] * model_features, axis=0)
-        if self.center_binary_features:
-            self.feature_probabilities += rate * (np.mean(features, axis=0) - self.feature_probabilities)
+    @property
+    def intercept(self) -> float:
+        return float(np.asarray(self.params["bias"]).reshape(()))
 
 
 def slow_sgd_linear_regressor(n_features: int) -> SGDLinearRegressor:

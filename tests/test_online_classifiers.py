@@ -86,10 +86,10 @@ def test_warmup_is_excluded_from_reported_metrics() -> None:
     assert record["accuracy"] == 0.5
 
 
-def test_sgd_classifier_predict_then_observe() -> None:
+def test_sgd_classifier_predict_then_update() -> None:
     model = SGDLinearClassifier(2, 3, learning_rate=0.01, sgd_steps=1)
     assert model.predict(np.array([1.0, 0.0])) in {0, 1, 2}
-    model.observe(np.array([0.0, 1.0]), 1)
+    model.update(1)
     assert model.n_observed == 1
 
 
@@ -98,14 +98,18 @@ def test_b_classifier_requires_binary_features() -> None:
     with pytest.raises(ValueError, match="binary"):
         model.predict(np.array([0.5, 0.0]))
     model.predict(np.array([1, 0], dtype=np.uint8))
-    model.observe(np.array([1, 0], dtype=np.uint8), 1)
+    model.update(1)
 
 
-def test_mlp_classifier_runs_with_sklearn() -> None:
-    pytest.importorskip("sklearn")
+def test_mlp_classifier_runs_on_a_short_stream() -> None:
     model = MLPClassifier(2, 3, batch_size=2, sgd_steps=1, random_state=0)
-    assert model.predict(np.array([0.0, 1.0])) == 0
-    model.observe(np.array([0.0, 1.0]), 1)
+    assert model.predict(np.array([0.0, 1.0])) in {0, 1, 2}
+    model.update(1)
     model.predict(np.array([1.0, 0.0]))
-    model.observe(np.array([1.0, 0.0]), 2)
+    model.update(2)
     assert model.n_observed == 2
+
+
+def test_mlp_classifier_rejects_unknown_kwargs() -> None:
+    with pytest.raises(TypeError):
+        MLPClassifier(2, 3, momentum=0.9)

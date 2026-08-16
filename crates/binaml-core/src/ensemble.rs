@@ -46,6 +46,8 @@ impl EnsembleConfig {
 pub(crate) enum EnsembleError {
     InvalidConfig,
     InvalidInput,
+    PendingPrediction,
+    NoPendingPrediction,
     Build,
     Compact,
 }
@@ -74,6 +76,12 @@ pub(crate) trait EnsembleHead: std::fmt::Debug {
 }
 
 #[derive(Debug)]
+struct PendingStep {
+    features: Vec<bool>,
+    function_values: Vec<bool>,
+}
+
+#[derive(Debug)]
 pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
     pub config: EnsembleConfig,
     pub source_feature_count: usize,
@@ -82,6 +90,7 @@ pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
     pub feature_batch_features: Vec<Vec<bool>>,
     pub feature_batch_signs: Vec<bool>,
     pub n_observed: usize,
+    pending: Option<PendingStep>,
 }
 
 impl<H: EnsembleHead> BooleanEnsemble<H> {
@@ -95,6 +104,7 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
             feature_batch_features: Vec::with_capacity(config.batch_size),
             feature_batch_signs: Vec::with_capacity(config.batch_size),
             n_observed: 0,
+            pending: None,
         })
     }
 
@@ -111,19 +121,35 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
             .collect()
     }
 
-    pub fn observe(&mut self, features: &[bool], target: H::Target) -> Result<(), EnsembleError> {
+    pub fn begin_predict(&mut self, features: &[bool]) -> Result<Vec<bool>, EnsembleError> {
+        if self.pending.is_some() {
+            return Err(EnsembleError::PendingPrediction);
+        }
         self.validate_features(features)?;
+        let function_values = self.function_values(features);
+        self.pending = Some(PendingStep {
+            features: features.to_vec(),
+            function_values: function_values.clone(),
+        });
+        Ok(function_values)
+    }
+
+    pub fn update(&mut self, target: H::Target) -> Result<(), EnsembleError> {
         self.head.validate_target(target)?;
+        let pending = self.pending.take().ok_or(EnsembleError::NoPendingPrediction)?;
         self.n_observed += 1;
 
-        let function_values = self.function_values(features);
-        let sign = self.head.batch_sign(target, &function_values);
-        self.feature_batch_features.push(features.to_vec());
+        let sign = self.head.batch_sign(target, &pending.function_values);
+        self.feature_batch_features.push(pending.features);
         self.feature_batch_signs.push(sign);
 
         for _ in 0..self.config.sgd_steps {
-            self.head
-                .update(target, &function_values, self.config.learning_rate, self.config.l2);
+            self.head.update(
+                target,
+                &pending.function_values,
+                self.config.learning_rate,
+                self.config.l2,
+            );
         }
 
         if self.feature_batch_features.len() == self.config.batch_size {

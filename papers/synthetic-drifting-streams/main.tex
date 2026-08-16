@@ -365,32 +365,30 @@ The \texttt{binaml.environments} package owns generation, configuration,
 serialization, and state restoration through separate regression and
 classification modules.  \texttt{binaml.models} owns online models and has no
 environment dependency.  A model implements
-\texttt{predict(features)} and \texttt{observe(features, target)}.  The
-prediction call may retain its routing or matching context; \texttt{observe}
-receives the features and target, and may use the retained context or rerun
-inference.  The \texttt{binaml.evaluation}
-package combines the two through predict-then-observe prequential evaluation.
+\texttt{predict(features)} and \texttt{update(target)}.  The
+prediction call retains the features and any derived state;
+\texttt{update} applies the revealed target to that stored prediction.
+The \texttt{binaml.evaluation}
+package combines the two through predict-then-update prequential evaluation.
 Named benchmark scenarios only compose these
 independent components.
 
 \section{Reference online baselines}
 The library provides generic online baselines alongside the binary-feature
 models.  For regression, the linear SGD baseline predicts with an affine
-function of the observed coordinates and the MLP baseline wraps scikit-learn's
-\texttt{MLPRegressor} with its \texttt{sgd} solver.  For classification, the
-linear SGD baseline uses softmax cross-entropy on centered binary features and
-the MLP baseline wraps scikit-learn's \texttt{MLPClassifier}.  Scikit-learn
-baselines are optional and are installed through the \texttt{benchmarks}
-dependency extra so ordinary library users do not need scikit-learn.
+function of the observed coordinates and the MLP baseline is a JAX
+one-hidden-layer ReLU network.  For classification, the
+linear SGD baseline uses softmax cross-entropy and
+the MLP baseline uses the same JAX replay scaffold with a softmax head.
+JAX baselines are optional and are installed through the \texttt{benchmarks}
+dependency extra so ordinary library users do not need JAX.
 
-All provided models use the same replay convention.  After observing a target,
+All provided models use the same replay convention.  After updating with a target,
 they retain the most recent $B$ labeled samples and make $S$ optimization
-updates on that window.  The linear baseline applies an averaged full-batch
-gradient update at each step.  The MLP uses one \texttt{partial\_fit} pass per
-step; its internal minibatch size equals the current replay-window length
-during warm-up.  Reported comparisons must state each baseline's architecture,
-learning rate, regularization, replay size $B$, step count $S$, optimizer
-settings, and random seed.
+updates on that window.  Linear and MLP baselines both apply an averaged
+full-batch gradient update at each step.  Reported comparisons must state each
+baseline's architecture, learning rate, regularization, replay size $B$, step
+count $S$, optimizer settings, and random seed.
 
 \section{Determinism and reproducibility}
 Every trajectory is determined by a validated JSON configuration and a single
@@ -401,18 +399,19 @@ and configuration fingerprints are recorded with run artifacts.
 
 \section{Prequential evaluation protocol}
 For each emitted sample, an evaluator first records the model prediction, then
-exposes the target through \texttt{observe}.  Regression benchmarks compute
+exposes the target through \texttt{update}.  Regression benchmarks compute
 mean squared error from the recorded pre-update predictions; classification
 benchmarks compute accuracy from the recorded pre-update class predictions.
 Benchmarks publish their horizon, scenario configuration, seeds, generator
-version, and separate total, prediction, and observation timings; aggregate
+version, and separate total, prediction, and update timings; aggregate
 metrics alone are insufficient for replication.
 
 \paragraph{Warm-up.}
 A scenario may specify a non-negative \texttt{warmup\_samples} count smaller
-than its horizon.  Models predict and observe these initial samples normally,
-but their errors are excluded from reported regression MSE and RMSE or
-classification accuracy.  Time-series plots retain the full trajectory and
+than its horizon.  Models predict and update these initial samples normally,
+but their errors and step timings are excluded from reported regression MSE
+and RMSE or classification accuracy, and from published timings.
+Time-series plots retain the full trajectory and
 mark the first evaluated sample with a vertical line so that the learning period
 remains visible.
 

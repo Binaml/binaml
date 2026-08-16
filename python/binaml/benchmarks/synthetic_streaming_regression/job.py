@@ -37,7 +37,7 @@ def run_job(args: argparse.Namespace) -> dict[str, object]:
 
     from .cli import _record
 
-    result = evaluate_prequentially(model, trajectory)
+    result = evaluate_prequentially(model, trajectory, warmup_samples=warmup_samples)
     return {
         "schema_version": 1,
         "model": args.model_name,
@@ -46,7 +46,7 @@ def run_job(args: argparse.Namespace) -> dict[str, object]:
         "timing_seconds": {
             "total": result.timing_seconds.total,
             "prediction": result.timing_seconds.prediction,
-            "observation": result.timing_seconds.observation,
+            "update": result.timing_seconds.update,
         },
         "predictions": result.predictions.tolist(),
         "squared_errors": result.squared_errors.tolist(),

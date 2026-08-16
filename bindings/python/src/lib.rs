@@ -55,16 +55,14 @@ impl BRegressorCore {
         })
     }
 
-    fn predict(&self, features: PyReadonlyArray1<'_, u8>) -> PyResult<f64> {
+    fn predict(&mut self, features: PyReadonlyArray1<'_, u8>) -> PyResult<f64> {
         self.model
             .predict(&binary_features(features)?)
             .map_err(model_error)
     }
 
-    fn observe(&mut self, features: PyReadonlyArray1<'_, u8>, target: f64) -> PyResult<()> {
-        self.model
-            .observe(&binary_features(features)?, target)
-            .map_err(model_error)
+    fn update(&mut self, target: f64) -> PyResult<()> {
+        self.model.update(target).map_err(model_error)
     }
 
     #[getter]
@@ -124,16 +122,14 @@ impl BClassifierCore {
         })
     }
 
-    fn predict(&self, features: PyReadonlyArray1<'_, u8>) -> PyResult<usize> {
+    fn predict(&mut self, features: PyReadonlyArray1<'_, u8>) -> PyResult<usize> {
         self.model
             .predict(&binary_features(features)?)
             .map_err(model_error)
     }
 
-    fn observe(&mut self, features: PyReadonlyArray1<'_, u8>, target: usize) -> PyResult<()> {
-        self.model
-            .observe(&binary_features(features)?, target)
-            .map_err(model_error)
+    fn update(&mut self, target: usize) -> PyResult<()> {
+        self.model.update(target).map_err(model_error)
     }
 
     #[getter]

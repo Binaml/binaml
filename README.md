@@ -46,10 +46,10 @@ for features, target in [
     (np.array([1, 0], dtype=np.uint8), 0.0),
 ]:
     prediction = model.predict(features)
-    model.observe(features, target)
+    model.update(target)
 ```
 
-Each `predict(features)` call must be followed by `observe(features, target)`.
+Each `predict(features)` call must be followed by `update(target)`.
 
 ## Quick start: Rust
 
@@ -70,7 +70,7 @@ fn main() -> Result<(), BRegressorError> {
 
     for (features, target) in [([false, true], 1.0), ([true, false], 0.0)] {
         let prediction = model.predict(&features)?;
-        model.observe(&features, target)?;
+        model.update(target)?;
         println!("{prediction}");
     }
 
@@ -84,14 +84,17 @@ The included synthetic streaming environments and prequential evaluation
 protocol compare `BRegressor` and `BClassifier` with linear and MLP baselines.
 See the
 [synthetic drifting streams paper](papers/synthetic-drifting-streams/)
-for the benchmark specification. Plotting support is optional:
+for the benchmark specification. Metrics are written by default; pass
+`--plots` to also write PNG artifacts. Linear and MLP baselines require the
+`benchmarks` extra (JAX):
 
 ```bash
 uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_regression.cli \
   --scenario python/binaml/benchmarks/synthetic_streaming_regression/scenarios/default.json
 
 uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_classification.cli \
-  --scenario python/binaml/benchmarks/synthetic_streaming_classification/scenarios/default.json
+  --scenario python/binaml/benchmarks/synthetic_streaming_classification/scenarios/default.json \
+  --plots
 ```
 
 ## Citation
