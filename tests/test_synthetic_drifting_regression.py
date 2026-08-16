@@ -104,7 +104,16 @@ def test_prequential_protocol_learns_after_prediction() -> None:
     assert result.predictions.shape == result.targets.shape == (10,)
     assert np.isfinite(result.mean_squared_error)
     assert result.timing_seconds.total >= result.timing_seconds.prediction >= 0
-    assert result.timing_seconds.total >= result.timing_seconds.observation >= 0
+    assert result.timing_seconds.total >= result.timing_seconds.update >= 0
+
+
+def test_warmup_is_excluded_from_timing() -> None:
+    config = SyntheticStreamConfig(n_features=3, n_functions=1, noise_std=0)
+    stream = SyntheticDriftingRegressionStream(config, 1)
+    result = evaluate_prequentially(SGDLinearRegressor(3), stream, 8, warmup_samples=8)
+    assert result.timing_seconds.total == 0.0
+    assert result.timing_seconds.prediction == 0.0
+    assert result.timing_seconds.update == 0.0
 
 
 def test_feature_regressor_runs_on_the_binary_synthetic_stream() -> None:

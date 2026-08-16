@@ -1,4 +1,4 @@
-"""Predict-then-observe evaluation for online models."""
+"""Predict-then-update evaluation for online models."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Protocol
 import numpy as np
 
 if TYPE_CHECKING:
-    from binaml.models.base import OnlineModel
+    from binaml.models.base import OnlineClassifier, OnlineModel
 
 
 class RegressionSampleSource(Protocol):
@@ -24,7 +24,7 @@ class RegressionSampleSource(Protocol):
 class EvaluationTiming:
     total: float
     prediction: float
-    observation: float
+    update: float
 
 
 @dataclass(frozen=True)
@@ -44,35 +44,65 @@ class PrequentialResult:
         return float(np.sqrt(self.mean_squared_error))
 
 
-def evaluate_prequentially(
-    model: OnlineModel,
-    source: Iterable[tuple[np.ndarray, float]],
-    n_samples: int | None = None,
-    on_step: Callable[[int], None] | None = None,
-) -> PrequentialResult:
-    """Predict features before observing their target."""
-    predictions, targets, errors = [], [], []
+def _evaluate_prequentially_loop(
+    model: OnlineModel | OnlineClassifier,
+    source: Iterable[tuple[np.ndarray, object]],
+    n_samples: int | None,
+    on_step: Callable[[int], None] | None,
+    score: Callable[[object, object], float | bool],
+    warmup_samples: int = 0,
+) -> tuple[list[object], list[object], list[float | bool], EvaluationTiming]:
+    predictions: list[object] = []
+    targets: list[object] = []
+    scores: list[float | bool] = []
     total_seconds = 0.0
     prediction_seconds = 0.0
-    observation_seconds = 0.0
+    update_seconds = 0.0
     pairs = source if n_samples is None else islice(source, n_samples)
     for position, (features, target) in enumerate(pairs):
         step_start = perf_counter()
         prediction_start = perf_counter()
         prediction = model.predict(features)
-        prediction_seconds += perf_counter() - prediction_start
+        prediction_elapsed = perf_counter() - prediction_start
         predictions.append(prediction)
         targets.append(target)
-        errors.append((prediction - target) ** 2 if np.isfinite(prediction) else float("nan"))
-        observation_start = perf_counter()
-        model.observe(features, target)
-        observation_seconds += perf_counter() - observation_start
-        total_seconds += perf_counter() - step_start
+        scores.append(score(prediction, target))
+        update_start = perf_counter()
+        model.update(target)
+        update_elapsed = perf_counter() - update_start
+        if position >= warmup_samples:
+            prediction_seconds += prediction_elapsed
+            update_seconds += update_elapsed
+            total_seconds += perf_counter() - step_start
         if on_step is not None:
             on_step(position)
+    return (
+        predictions,
+        targets,
+        scores,
+        EvaluationTiming(total_seconds, prediction_seconds, update_seconds),
+    )
+
+
+def evaluate_prequentially(
+    model: OnlineModel,
+    source: Iterable[tuple[np.ndarray, float]],
+    n_samples: int | None = None,
+    on_step: Callable[[int], None] | None = None,
+    warmup_samples: int = 0,
+) -> PrequentialResult:
+    """Predict features before updating with their target."""
+    predictions, targets, errors, timing = _evaluate_prequentially_loop(
+        model,
+        source,
+        n_samples,
+        on_step,
+        lambda prediction, target: (prediction - target) ** 2 if np.isfinite(prediction) else float("nan"),
+        warmup_samples,
+    )
     return PrequentialResult(
         np.asarray(predictions),
         np.asarray(targets),
         np.asarray(errors),
-        EvaluationTiming(total_seconds, prediction_seconds, observation_seconds),
+        timing,
     )

@@ -9,8 +9,12 @@ uv sync
 uv run pytest
 uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_regression.cli \
  --scenario python/binaml/benchmarks/synthetic_streaming_regression/scenarios/default.json
+uv run --extra benchmarks python -m binaml.benchmarks.synthetic_streaming_regression.cli \
+ --scenario python/binaml/benchmarks/synthetic_streaming_regression/scenarios/default.json \
+ --plots
 ```
 
+JAX baselines are Python-only; they do not require a Rust rebuild.
 After editing Rust under `crates/` or `bindings/`, rebuild the extension:
 
 ```bash

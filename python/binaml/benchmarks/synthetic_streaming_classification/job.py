@@ -1,4 +1,4 @@
-"""One isolated model/seed streaming-regression benchmark job."""
+"""One isolated model/seed streaming-classification benchmark job."""
 
 from __future__ import annotations
 
@@ -7,15 +7,19 @@ import json
 from pathlib import Path
 
 from binaml.benchmarks._common import load_factory, write_json_atomically
-from binaml.environments import SyntheticStreamConfig, Trajectory, generate_trajectory
+from binaml.environments import (
+    ClassificationTrajectory,
+    SyntheticClassificationStreamConfig,
+    generate_classification_trajectory,
+)
 
 
-def _load_trajectory(args: argparse.Namespace) -> Trajectory:
+def _load_trajectory(args: argparse.Namespace) -> ClassificationTrajectory:
     if args.scenario is not None:
         scenario = json.loads(args.scenario.read_text(encoding="utf-8"))
-        config = SyntheticStreamConfig.from_dict(scenario["environment"])
-        return generate_trajectory(config, int(scenario["n_samples"]), args.seed, return_metadata=True)
-    return Trajectory.load_npz(args.trajectory)
+        config = SyntheticClassificationStreamConfig.from_dict(scenario["environment"])
+        return generate_classification_trajectory(config, int(scenario["n_samples"]), args.seed, return_metadata=True)
+    return ClassificationTrajectory.load_npz(args.trajectory)
 
 
 def run_job(args: argparse.Namespace) -> dict[str, object]:
@@ -31,13 +35,13 @@ def run_job(args: argparse.Namespace) -> dict[str, object]:
     parameters = json.loads(args.parameters_json)
     if not isinstance(parameters, dict):
         raise TypeError("model parameters must be a JSON object")
-    model = factory(trajectory.config.n_features, **parameters)
+    model = factory(trajectory.config.n_features, trajectory.config.n_classes, **parameters)
 
-    from binaml.evaluation import evaluate_prequentially
+    from binaml.evaluation import evaluate_prequentially_classification
 
     from .cli import _record
 
-    result = evaluate_prequentially(model, trajectory, warmup_samples=warmup_samples)
+    result = evaluate_prequentially_classification(model, trajectory, warmup_samples=warmup_samples)
     return {
         "schema_version": 1,
         "model": args.model_name,
@@ -49,7 +53,7 @@ def run_job(args: argparse.Namespace) -> dict[str, object]:
             "update": result.timing_seconds.update,
         },
         "predictions": result.predictions.tolist(),
-        "squared_errors": result.squared_errors.tolist(),
+        "correct": result.correct.tolist(),
     }
 
 

@@ -91,23 +91,27 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-This paper specifies a reproducible synthetic online regression task for binary
-feature vectors.
+This paper specifies reproducible synthetic online regression and multiclass
+classification tasks for binary feature vectors.
 Concept drift shows up across real-world ML, yet most frameworks still assume
-stationary train/serve data; this task takes nonstationarity as a first-class
+stationary train/serve data; these tasks take nonstationarity as a first-class
 requirement with controllable drift axes rather than an afterthought.
 A synthetic setting makes it easy to experiment with controlled, reproducible
 scenarios---known latent mechanisms, seeded trajectories, and explicit scenario
 knobs---so adaptation can be studied without confounding from opaque real
-streams.  The paper defines the synthetic environment, its independent sources
-of concept drift, the model boundary, and the prequential evaluation protocol.
-It is a task and library specification, not a performance report.
+streams.  The paper defines both synthetic environments, their independent
+sources of concept drift, the model boundary, and the prequential evaluation
+protocol for each task.  It is a task and library specification, not a
+performance report.
 \end{abstract}
 
 \section{Notation}
 \begin{description}
   \item[$\xi,d,m,\sigma$] Root seed, input width, number of components, and noise standard deviation.
   \item[$x_t,g_t$] Current binary input and latent activity-gate states.
+  \item[$K,y_t$] Number of classes and observed class label (classification).
+  \item[$s_{t,c},\tilde s_{t,c}$] Noiseless and noisy class score
+  (classification).
   \item[$y_t,\tilde y_t$] Noiseless and observed regression targets.
   \item[$b_t,\epsilon_t,\sigma$] Intercept, observation noise, and its standard deviation.
   \item[$f_i:\{0,1\}^d\to\{0,1\},w_i$] Fixed binary indicator function and its fixed weight.
@@ -126,7 +130,7 @@ It is a task and library specification, not a performance report.
   \item[$S_t^b$] Intercept-sampling indicator.
 \end{description}
 
-\section{Synthetic environment and target}
+\section{Regression task}
 At time $t$, an environment emits a binary vector $x_t\in\{0,1\}^d$ and an
 observed scalar target $\tilde y_t$.  The environment also maintains binary
 activity gates $g_t\in\{0,1\}^m$, one per target component, which are never
@@ -324,36 +328,67 @@ shifts.
 Gates remain unobserved activity variation.  Oracle metadata is optional and
 is never supplied to a model.
 
+\section{Multiclass classification task}
+The classification variant reuses the observed binary input stream
+$x_t\in\{0,1\}^d$ and the same boolean function family
+$f_j:\{0,1\}^d\to\{0,1\}$ sampled once at initialization.  For each class
+$c\in\{0,\ldots,K-1\}$, the environment maintains hidden activity gates
+$g_{t,c}\in\{0,1\}^m$, intercept $b_{t,c}$, and weights $w_{c,j}$ sampled
+independently at initialization and fixed thereafter.  The noiseless class
+score is
+\[
+s_{t,c}=b_{t,c}+\sum_{j=1}^{m}w_{c,j}\,g_{t,c,j}\,f_j(x_t).
+\]
+Independent Gaussian noise perturbs each score,
+$\tilde s_{t,c}=s_{t,c}+\epsilon_{t,c}$ with
+$\epsilon_{t,c}\sim\mathcal N(0,\sigma^2)$, and the emitted label is
+\[
+y_t=\operatorname*{argmax}_{c}\tilde s_{t,c},
+\]
+with ties broken toward the smallest class index.  Input drift matches the
+regression task.  Gate distribution resampling, partial gate resampling, and
+intercept resampling are independent per class using the same probabilities
+$p_g$, $p_{\mathrm{sample,min}}^g$, $p_{\mathrm{sample,max}}^g$, $p_b$,
+$b_{\min}$, and $b_{\max}$ as in regression.
+
+\paragraph{Stream generation.}
+Initialize shared functions, input distribution, and per-class gate
+distributions, gate states, intercepts, and weight matrices.  At each time
+step emit $(x_t,y_t)$ from the current states and noisy scores, then apply the
+shared input update and independent per-class gate and intercept updates
+described above.
+
 \section{API and integration boundaries}
 Swappable generators, models, and metrics are required for fair prequential
 benchmarks; coupling them would bake evaluation assumptions into model code.
 The \texttt{binaml.environments} package owns generation, configuration,
-serialization, and state restoration.  \texttt{binaml.models} owns online
-models and has no environment dependency.  A model implements
-\texttt{predict(features)} and \texttt{observe(features, target)}.  The
-prediction call may retain its routing or matching context; \texttt{observe}
-receives the features and target, and may use the retained context or rerun
-inference.  The \texttt{binaml.evaluation}
-package combines the two through predict-then-observe prequential evaluation.
+serialization, and state restoration through separate regression and
+classification modules.  \texttt{binaml.models} owns online models and has no
+environment dependency.  A model implements
+\texttt{predict(features)} and \texttt{update(target)}.  The
+prediction call retains the features and any derived state;
+\texttt{update} applies the revealed target to that stored prediction.
+The \texttt{binaml.evaluation}
+package combines the two through predict-then-update prequential evaluation.
 Named benchmark scenarios only compose these
 independent components.
 
 \section{Reference online baselines}
-The library provides two generic online baselines alongside the binary-feature
-regressor.  The linear SGD baseline predicts with an affine function of the
-observed coordinates.  The MLP baseline wraps scikit-learn's
-\texttt{MLPRegressor} with its \texttt{sgd} solver.  It is optional and is
-installed through the \texttt{benchmarks} dependency extra so ordinary library
-users do not need scikit-learn.
+The library provides generic online baselines alongside the binary-feature
+models.  For regression, the linear SGD baseline predicts with an affine
+function of the observed coordinates and the MLP baseline is a JAX
+one-hidden-layer ReLU network.  For classification, the
+linear SGD baseline uses softmax cross-entropy and
+the MLP baseline uses the same JAX replay scaffold with a softmax head.
+JAX baselines are optional and are installed through the \texttt{benchmarks}
+dependency extra so ordinary library users do not need JAX.
 
-All provided models use the same replay convention.  After observing a target,
+All provided models use the same replay convention.  After updating with a target,
 they retain the most recent $B$ labeled samples and make $S$ optimization
-updates on that window.  The linear baseline applies an averaged full-batch
-gradient update at each step.  The MLP uses one \texttt{partial\_fit} pass per
-step; its internal minibatch size equals the current replay-window length
-during warm-up.  Reported comparisons must state each baseline's architecture,
-learning rate, regularization, replay size $B$, step count $S$, optimizer
-settings, and random seed.
+updates on that window.  Linear and MLP baselines both apply an averaged
+full-batch gradient update at each step.  Reported comparisons must state each
+baseline's architecture, learning rate, regularization, replay size $B$, step
+count $S$, optimizer settings, and random seed.
 
 \section{Determinism and reproducibility}
 Every trajectory is determined by a validated JSON configuration and a single
@@ -363,22 +398,25 @@ the full latent state and bit-generator states.  Scenarios, generator versions,
 and configuration fingerprints are recorded with run artifacts.
 
 \section{Prequential evaluation protocol}
-For each emitted $(x_t,\tilde y_t)$, an evaluator first records the model
-prediction, then exposes the target through \texttt{observe}.  Mean squared
-error is computed from the recorded pre-update predictions.  Benchmarks publish
-their horizon, scenario configuration, seeds, generator version, and separate
-total, prediction, and observation timings; aggregate metrics alone are
-insufficient for replication.
+For each emitted sample, an evaluator first records the model prediction, then
+exposes the target through \texttt{update}.  Regression benchmarks compute
+mean squared error from the recorded pre-update predictions; classification
+benchmarks compute accuracy from the recorded pre-update class predictions.
+Benchmarks publish their horizon, scenario configuration, seeds, generator
+version, and separate total, prediction, and update timings; aggregate
+metrics alone are insufficient for replication.
 
 \paragraph{Warm-up.}
 A scenario may specify a non-negative \texttt{warmup\_samples} count smaller
-than its horizon.  Models predict and observe these initial samples normally,
-but their errors are excluded from reported MSE and RMSE.  Time-series plots
-retain the full trajectory and mark the first evaluated sample with a vertical
-line so that the learning period remains visible.
+than its horizon.  Models predict and update these initial samples normally,
+but their errors and step timings are excluded from reported regression MSE
+and RMSE or classification accuracy, and from published timings.
+Time-series plots retain the full trajectory and
+mark the first evaluated sample with a vertical line so that the learning period
+remains visible.
 
 \section{Limitations and scope}
-The task is designed for controlled adaptation studies.  It does not claim
+These tasks are designed for controlled adaptation studies.  They do not claim
 that synthetic drift matches a particular deployment, nor does this document
 make comparative performance claims.  Results may be added only for versioned
 scenarios with repeatable baseline runs.

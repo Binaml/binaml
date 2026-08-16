@@ -33,6 +33,6 @@ benchmark specification informs your work, using that paper's `CITATION.cff`.
 - [`binaml`](binaml/): *Binaml: Continual Learning over Binary Feature
   Streams*;
   [citation metadata](binaml/CITATION.cff).
-- [`synthetic-drifting-regression`](synthetic-drifting-regression/): *Synthetic
-  Drifting Regression over Binary Feature Streams*;
-  [citation metadata](synthetic-drifting-regression/CITATION.cff).
+- [`synthetic-drifting-streams`](synthetic-drifting-streams/): *Synthetic
+  Drifting Streams over Binary Features: Regression and Classification*;
+  [citation metadata](synthetic-drifting-streams/CITATION.cff).

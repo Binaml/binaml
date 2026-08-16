@@ -1,91 +1,42 @@
-use crate::function_compact::CompactError;
-use crate::{
-    compact, FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
-};
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RegressorConfig {
-    learning_rate: f64,
-    l2: f64,
-    sgd_steps: usize,
-    batch_size: usize,
-    max_layers: usize,
-    parent_top_k: usize,
-    max_functions: usize,
-}
-
-impl RegressorConfig {
-    fn build_config(&self) -> FunctionBuildConfig {
-        FunctionBuildConfig {
-            batch_size: self.batch_size,
-            parent_top_k: self.parent_top_k,
-            max_layers: self.max_layers,
-        }
-    }
-}
+use crate::ensemble::{BooleanEnsemble, EnsembleConfig, EnsembleError, RegressionHead};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BRegressorError {
     InvalidConfig,
     InvalidInput,
     NonFiniteTarget,
+    PendingPrediction,
+    NoPendingPrediction,
     Build,
     Compact,
 }
 
-impl From<FunctionBuildError> for BRegressorError {
-    fn from(_: FunctionBuildError) -> Self {
-        Self::Build
-    }
-}
-
-impl From<CompactError> for BRegressorError {
-    fn from(_: CompactError) -> Self {
-        Self::Compact
+impl From<EnsembleError> for BRegressorError {
+    fn from(error: EnsembleError) -> Self {
+        match error {
+            EnsembleError::InvalidConfig => Self::InvalidConfig,
+            EnsembleError::InvalidInput => Self::InvalidInput,
+            EnsembleError::PendingPrediction => Self::PendingPrediction,
+            EnsembleError::NoPendingPrediction => Self::NoPendingPrediction,
+            EnsembleError::Build => Self::Build,
+            EnsembleError::Compact => Self::Compact,
+        }
     }
 }
 
 /// Online regression over an ensemble of batch-learned boolean functions.
 #[derive(Debug)]
 pub struct BRegressor {
-    config: RegressorConfig,
-    source_feature_count: usize,
-    intercept: f64,
-    functions: Vec<FunctionGraph>,
-    weights: Vec<f64>,
-    feature_batch_features: Vec<Vec<bool>>,
-    feature_batch_signs: Vec<bool>,
-    n_observed: usize,
+    ensemble: BooleanEnsemble<RegressionHead>,
 }
 
 impl BRegressor {
     pub(crate) fn new(
         source_feature_count: usize,
-        config: RegressorConfig,
+        config: EnsembleConfig,
     ) -> Result<Self, BRegressorError> {
-        if source_feature_count == 0
-            || config.max_functions == 0
-            || config.batch_size == 0
-            || config.batch_size > crate::FeatureCounter::MAX_BATCH_SIZE
-            || !config.learning_rate.is_finite()
-            || config.learning_rate <= 0.0
-            || !config.l2.is_finite()
-            || config.l2 < 0.0
-            || config.sgd_steps == 0
-            || config.parent_top_k == 0
-            || config.max_layers == 0
-        {
-            return Err(BRegressorError::InvalidConfig);
-        }
         Ok(Self {
-            config,
-            source_feature_count,
-            intercept: 0.0,
-            functions: Vec::new(),
-            weights: Vec::new(),
-            feature_batch_features: Vec::with_capacity(config.batch_size),
-            feature_batch_signs: Vec::with_capacity(config.batch_size),
-            n_observed: 0,
+            ensemble: BooleanEnsemble::new(source_feature_count, RegressionHead::new(), config)?,
         })
     }
 
@@ -102,7 +53,7 @@ impl BRegressor {
     ) -> Result<Self, BRegressorError> {
         Self::new(
             source_feature_count,
-            RegressorConfig {
+            EnsembleConfig {
                 learning_rate,
                 l2,
                 sgd_steps,
@@ -116,125 +67,34 @@ impl BRegressor {
 
     #[must_use]
     pub fn intercept(&self) -> f64 {
-        self.intercept
+        self.ensemble.head.intercept
     }
 
     #[must_use]
     pub fn n_observed(&self) -> usize {
-        self.n_observed
+        self.ensemble.n_observed
     }
 
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.functions.len()
+        self.ensemble.functions.len()
     }
 
     #[must_use]
     pub fn weight(&self, index: usize) -> Option<f64> {
-        self.weights.get(index).copied()
+        self.ensemble.head.weights.get(index).copied()
     }
 
-    pub fn predict(&self, features: &[bool]) -> Result<f64, BRegressorError> {
-        self.validate_features(features)?;
-        Ok(self.prediction_from_values(&self.evaluate_functions(features)))
+    pub fn predict(&mut self, features: &[bool]) -> Result<f64, BRegressorError> {
+        let function_values = self.ensemble.begin_predict(features)?;
+        Ok(self.ensemble.head.predict(&function_values))
     }
 
-    pub fn observe(&mut self, features: &[bool], target: f64) -> Result<(), BRegressorError> {
-        self.validate_features(features)?;
+    pub fn update(&mut self, target: f64) -> Result<(), BRegressorError> {
         if !target.is_finite() {
             return Err(BRegressorError::NonFiniteTarget);
         }
-        self.n_observed += 1;
-
-        let function_values = self.evaluate_functions(features);
-        let sign = target - self.prediction_from_values(&function_values) >= 0.0;
-        self.feature_batch_features.push(features.to_vec());
-        self.feature_batch_signs.push(sign);
-
-        for _ in 0..self.config.sgd_steps {
-            self.update_single_sample(target, &function_values);
-        }
-
-        if self.feature_batch_features.len() == self.config.batch_size {
-            self.finish_batch()?;
-            self.feature_batch_features.clear();
-            self.feature_batch_signs.clear();
-        }
-        Ok(())
-    }
-
-    fn validate_features(&self, features: &[bool]) -> Result<(), BRegressorError> {
-        (features.len() == self.source_feature_count)
-            .then_some(())
-            .ok_or(BRegressorError::InvalidInput)
-    }
-
-    fn evaluate_functions(&self, features: &[bool]) -> Vec<bool> {
-        self.functions
-            .iter()
-            .map(|function| function.evaluate(features))
-            .collect()
-    }
-
-    fn prediction_from_values(&self, function_values: &[bool]) -> f64 {
-        self.intercept
-            + function_values
-                .iter()
-                .zip(&self.weights)
-                .map(|(value, weight)| weight * (2.0 * f64::from(*value) - 1.0))
-                .sum::<f64>()
-    }
-
-    fn update_single_sample(&mut self, target: f64, function_values: &[bool]) {
-        let prediction = self.prediction_from_values(function_values);
-        let error = target - prediction;
-        let rate = self.config.learning_rate;
-        let decay = 1.0 - rate * self.config.l2;
-        for weight in &mut self.weights {
-            *weight *= decay;
-        }
-        self.intercept += rate * error;
-        for (weight, value) in self.weights.iter_mut().zip(function_values) {
-            let centered = 2.0 * f64::from(*value) - 1.0;
-            *weight += rate * error * centered;
-        }
-    }
-
-    fn finish_batch(&mut self) -> Result<(), BRegressorError> {
-        let columns: Vec<Vec<bool>> = (0..self.source_feature_count)
-            .map(|index| {
-                self.feature_batch_features
-                    .iter()
-                    .map(|row| row[index])
-                    .collect()
-            })
-            .collect();
-        let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
-        let batch = SignBatch {
-            feature_columns: &column_refs,
-            signs: &self.feature_batch_signs,
-        };
-        let (ephemeral, output) = FunctionBuilder::build(batch, self.config.build_config())?;
-        let graph = compact(ephemeral, output)?;
-        self.functions.push(graph);
-        self.weights.push(0.0);
-        if self.functions.len() > self.config.max_functions {
-            let index = self
-                .weights
-                .iter()
-                .enumerate()
-                .min_by(|(left_index, left_weight), (right_index, right_weight)| {
-                    left_weight
-                        .abs()
-                        .total_cmp(&right_weight.abs())
-                        .then_with(|| left_index.cmp(right_index))
-                })
-                .map(|(index, _)| index)
-                .expect("non-empty ensemble");
-            self.functions.remove(index);
-            self.weights.remove(index);
-        }
-        Ok(())
+        self.ensemble.update(target).map_err(Into::into)
     }
 }
 
@@ -246,11 +106,20 @@ mod tests {
         BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 2, 1, max_functions).unwrap()
     }
 
+    fn weights(model: &mut BRegressor) -> &mut Vec<f64> {
+        &mut model.ensemble.head.weights
+    }
+
+    fn step(model: &mut BRegressor, features: &[bool], target: f64) {
+        model.predict(features).unwrap();
+        model.update(target).unwrap();
+    }
+
     #[test]
     fn batch_fill_excludes_new_function_from_sgd() {
         let mut model = model(2, 8);
-        model.observe(&[false, false], -1.0).unwrap();
-        model.observe(&[true, false], 1.0).unwrap();
+        step(&mut model, &[false, false], -1.0);
+        step(&mut model, &[true, false], 1.0);
         assert_eq!(model.function_count(), 1);
         assert_eq!(model.weight(0), Some(0.0));
     }
@@ -258,20 +127,20 @@ mod tests {
     #[test]
     fn ensemble_appends_every_batch() {
         let mut model = model(1, 3);
-        model.observe(&[false, true], 1.0).unwrap();
-        model.observe(&[true, false], -1.0).unwrap();
-        model.observe(&[false, false], 0.0).unwrap();
-        model.observe(&[true, true], 1.0).unwrap();
+        step(&mut model, &[false, true], 1.0);
+        step(&mut model, &[true, false], -1.0);
+        step(&mut model, &[false, false], 0.0);
+        step(&mut model, &[true, true], 1.0);
         assert_eq!(model.function_count(), 3);
     }
 
     #[test]
     fn prunes_smallest_abs_weight() {
         let mut model = model(1, 2);
-        model.observe(&[false, true], 1.0).unwrap();
-        model.observe(&[true, false], -1.0).unwrap();
-        model.weights[0] = 2.0;
-        model.observe(&[false, false], 0.0).unwrap();
+        step(&mut model, &[false, true], 1.0);
+        step(&mut model, &[true, false], -1.0);
+        weights(&mut model)[0] = 2.0;
+        step(&mut model, &[false, false], 0.0);
         assert_eq!(model.function_count(), 2);
         assert!(model.weight(0).unwrap().abs() >= model.weight(1).unwrap().abs());
     }
@@ -279,10 +148,25 @@ mod tests {
     #[test]
     fn prune_tiebreak_oldest_at_equal_abs_weight() {
         let mut model = model(1, 2);
-        model.observe(&[false, true], 1.0).unwrap();
-        model.observe(&[true, false], -1.0).unwrap();
-        model.weights = vec![0.0, 0.0];
-        model.observe(&[false, false], 0.0).unwrap();
+        step(&mut model, &[false, true], 1.0);
+        step(&mut model, &[true, false], -1.0);
+        *weights(&mut model) = vec![0.0, 0.0];
+        step(&mut model, &[false, false], 0.0);
         assert_eq!(model.function_count(), 2);
+    }
+
+    #[test]
+    fn update_requires_preceding_predict() {
+        let mut model = model(2, 8);
+        assert_eq!(
+            model.update(-1.0),
+            Err(super::BRegressorError::NoPendingPrediction)
+        );
+        model.predict(&[false, false]).unwrap();
+        assert_eq!(
+            model.predict(&[true, false]),
+            Err(super::BRegressorError::PendingPrediction)
+        );
+        model.update(-1.0).unwrap();
     }
 }

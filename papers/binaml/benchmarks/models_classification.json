@@ -1,0 +1,19 @@
+{
+  "models": [
+    {
+      "name": "BClassifier",
+      "factory": "binaml.models:BClassifier",
+      "parameters": {}
+    },
+    {
+      "name": "SGDLinearClassifier",
+      "factory": "binaml.models:SGDLinearClassifier",
+      "parameters": {}
+    },
+    {
+      "name": "MLPClassifier",
+      "factory": "binaml.models:MLPClassifier",
+      "parameters": {}
+    }
+  ]
+}
