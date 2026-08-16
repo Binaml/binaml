@@ -3,6 +3,8 @@
 mod batch;
 mod binary_truth_table;
 mod boolean_circuit;
+mod classifier;
+mod ensemble;
 mod function_builder;
 mod function_compact;
 mod function_graph;
@@ -10,6 +12,7 @@ mod regressor;
 
 pub(crate) use batch::SignBatch;
 pub(crate) use binary_truth_table::{FeatureCounter, FeatureCounterError};
+pub use classifier::{BClassifier, BClassifierError};
 pub(crate) use function_builder::{FunctionBuildConfig, FunctionBuildError, FunctionBuilder};
 pub(crate) use function_compact::compact;
 pub(crate) use function_graph::FunctionGraph;

@@ -6,10 +6,12 @@ import numpy as np
 
 from binaml._core import BRegressorCore
 
+from .base import PredictUpdateState, validate_binary_features, validate_finite_float_target
+
 DEFAULT_LEARNING_RATE = 5e-3
 
 
-class BRegressor:
+class BRegressor(PredictUpdateState):
     """Online regression over an ensemble of batch-learned boolean functions."""
 
     def __init__(
@@ -23,6 +25,7 @@ class BRegressor:
         max_layers: int = 3,
         max_functions: int = 64,
     ) -> None:
+        super().__init__()
         if (
             isinstance(n_features, bool)
             or not isinstance(n_features, int)
@@ -53,33 +56,17 @@ class BRegressor:
             max_layers,
             max_functions,
         )
-        self._prediction_pending = False
-
-    def _validate_features(self, features: np.ndarray) -> np.ndarray:
-        values = np.asarray(features)
-        if values.shape != (self.n_features,):
-            raise ValueError(f"features must have shape ({self.n_features},)")
-        if not np.issubdtype(values.dtype, np.number) or not np.all(np.isfinite(values)):
-            raise ValueError("features must be finite")
-        if not np.all((values == 0) | (values == 1)):
-            raise ValueError("features must be binary")
-        return np.ascontiguousarray(values, dtype=np.uint8)
 
     def predict(self, features: np.ndarray) -> float:
-        if self._prediction_pending:
-            raise RuntimeError("observe(features, target) must follow each predict(features)")
-        prediction = float(self._model.predict(self._validate_features(features)))
-        self._prediction_pending = True
-        return prediction
+        values = validate_binary_features(features, self.n_features)
+        self._begin_predict()
+        return float(self._model.predict(values))
 
-    def observe(self, features: np.ndarray, target: float) -> None:
-        if not self._prediction_pending:
-            raise RuntimeError("observe(features, target) requires a preceding predict(features)")
-        target_value = float(target)
-        if not np.isfinite(target_value):
-            raise ValueError("target must be finite")
-        self._model.observe(self._validate_features(features), target_value)
-        self._prediction_pending = False
+    def update(self, target: float) -> None:
+        self._begin_update()
+        target_value = validate_finite_float_target(target)
+        self._model.update(target_value)
+        self._finish_update()
 
     @property
     def intercept(self) -> float:

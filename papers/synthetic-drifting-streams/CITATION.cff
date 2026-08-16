@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this paper, please cite it using this metadata."
-title: "Synthetic Drifting Regression over Binary Feature Streams"
+title: "Synthetic Drifting Streams over Binary Features: Regression and Classification"
 authors:
   - family-names: Zimmer
     given-names: Romain
@@ -8,4 +8,4 @@ date-released: 2026-08-11
 version: draft
 type: article
 license: CC-BY-4.0
-url: "https://github.com/binaml/binaml/tree/main/papers/synthetic-drifting-regression"
+url: "https://github.com/binaml/binaml/tree/main/papers/synthetic-drifting-streams"

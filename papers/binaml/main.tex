@@ -95,20 +95,23 @@
 Binaml focuses on continual learning models over streams of binary features
 subject to data drift.  Binary features provide a task-agnostic representation
 and enable models optimized for memory, latency, and energy efficiency.  This
-paper specifies Binaml's current regression model, \texttt{BRegressor}, as an
-ensemble of batch-learned boolean functions with scalar weights rather than a
-monolithic growing feature store.  It adapts online rather than relying on a
-stationary train/serve assumption and learns compact compositional
-representations from residual feedback.  The model is environment-agnostic: it
-does not depend on how the stream is produced.  This paper specifies the
-current regression model and reports reproducible prequential comparisons on
-versioned synthetic streams.
+paper specifies Binaml's online ensemble models, \texttt{BRegressor} for scalar
+regression and \texttt{BClassifier} for multiclass classification, as ensembles
+of batch-learned boolean functions with task-specific linear heads.  Both models adapt online rather than
+relying on a stationary train/serve assumption and learn compact compositional
+representations from residual feedback.  The models are environment-agnostic:
+they do not depend on how the stream is produced.  This paper specifies the
+current models and reports reproducible prequential comparisons on versioned
+synthetic regression and classification streams.
 \end{abstract}
 
 \section{Notation}
 \begin{description}
-  \item[$d,x_t,y_t$] Input width, binary input, and scalar regression target.
-  \item[$\hat y_t,e_t,s_t$] Prediction, residual, and residual-sign label.
+  \item[$d,x_t$] Input width and binary input.
+  \item[$y_t,\hat y_t$] Scalar regression target and prediction.
+  \item[$K,c_t,\hat c_t$] Number of classes, class label, and predicted class
+  (classification).
+  \item[$e_t,s_t$] Residual and residual-sign label.
   \item[$b,w_k,\eta,\lambda$] Intercept, ensemble weight of function $k$,
   learning rate, and $\ell_2$ decay.
   \item[$f_k(x)$] Stored boolean function $k$ mapping $\{0,1\}^d$ to
@@ -121,10 +124,18 @@ versioned synthetic streams.
 \end{description}
 
 \section{Model}
-At time $t$, the model receives $x_t\in\{0,1\}^d$ and later observes a finite
-scalar $y_t$.  If useful signal is sparse weighted boolean structure over bits,
-a linear head over learned boolean indicators is a direct hypothesis class:
-continuous amplitudes, discrete features, and an inspectable composition.
+Both \texttt{BRegressor} and \texttt{BClassifier} share the same boolean
+function discovery pipeline: batch-local graph growth, in-sample output
+selection, compaction into \texttt{FunctionGraph} objects, and ensemble pruning
+at capacity $K_{\max}$.  They differ only in the linear head that maps stored
+function activations to predictions.
+
+\subsection{Regression head}
+At time $t$, the regressor receives $x_t\in\{0,1\}^d$ and later observes a
+finite scalar $y_t$.  If useful signal is sparse weighted boolean structure
+over bits, a linear head over learned boolean indicators is a direct hypothesis
+class: continuous amplitudes, discrete features, and an inspectable
+composition.
 Let $K_t$ be the number of stored functions after batch finalizations through
 time $t$.  The prediction is
 \[
@@ -142,6 +153,24 @@ $f_k(x_t)\in\{0,1\}$ is centered before entering the linear head:
 \]
 Each $f_k$ is a compact boolean function built from one residual-sign batch,
 not a node in a shared graph.
+
+\subsection{Classification head}
+The classifier receives $x_t\in\{0,1\}^d$ and later observes a class label
+$y_t\in\{0,\ldots,K-1\}$.  Let $K_t$ be the number of stored functions after
+batch finalizations through time $t$.  For each class $c$, logits are
+\[
+\ell_{t,c}
+=
+b_c
++
+\sum_{k=1}^{K_t}
+w_{k,c}\,\bigl(2f_k(x_t)-1\bigr),
+\]
+where $b_c\in\mathbb R$ and each $w_{k,c}\in\mathbb R$.  The predicted class
+is $\hat c_t=\operatorname*{argmax}_c \ell_{t,c}$, with ties broken toward the
+smallest index.  Residual-sign supervision for feature learning compares the
+target class logit to the largest competing logit before the corresponding
+linear updates.
 
 \paragraph{Composed features.}
 Composition starts from the most basic nontrivial boolean learning unit:
@@ -180,20 +209,25 @@ $B\leq255$.
 \texttt{FunctionBuilder} & stateless builder & grows ephemeral DAG from one \texttt{SignBatch} \\
 \texttt{FunctionGraph} & sources, compact nodes, output index & immutable stored function \\
 \texttt{CompactNode} & \texttt{Source}, \texttt{Constant}, or \texttt{Composed\{first, second, truth\_table\}} & one evaluation step \\
-\texttt{BRegressor} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<f64>}, intercept, batch buffers, count & online ensemble state \\
+\texttt{BRegressor} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<f64>}, intercept, batch buffers, count & online regression ensemble state \\
+\texttt{BClassifier} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<Vec<f64>>}, intercept vector, batch buffers, count & online classification ensemble state \\
 \hline
 \end{tabular}
 \end{center}
 
-\section{Online linear-head updates}
-Function identity is discrete; weights are continuous, so the two are updated
-separately.  For each observation $(x_t,y_t)$, evaluate the current stored
-functions once, compute the residual sign with the current weights, then
-perform $S$ single-sample squared-error gradient steps on that activation row.
-The newly appended function at a batch boundary is excluded from SGD on the
-batch-fill step because it is added only after those updates.  For one such
-step with pre-step residual $e_t=y_t-\hat y_t$, learning rate $\eta>0$, and
-decay $\lambda\geq 0$, apply
+\section{Online head updates}
+Function identity is discrete; head parameters are continuous, so the two are
+updated separately.  For regression, each observation $(x_t,y_t)$ evaluates the
+current stored functions once, computes the residual sign with the current
+weights, then performs $S$ single-sample squared-error gradient steps on that
+activation row.  For classification, each observation evaluates the current
+functions once, computes the residual sign from the target-class logit relative
+to the strongest competitor, then performs $S$ single-sample softmax
+cross-entropy gradient steps on that activation row.  In both models the newly
+appended function at a batch boundary is excluded from SGD on the batch-fill
+step because it is added only after those updates.  For one regression step
+with pre-step residual $e_t=y_t-\hat y_t$, learning rate $\eta>0$, and decay
+$\lambda\geq 0$, apply
 \begin{align*}
 w_k &\leftarrow (1-\eta\lambda)\,w_k
 &&\text{for all stored }k,\\
@@ -295,30 +329,35 @@ Structural work occurs once per feature batch: graph growth scans selected
 parent pairs over $B$ rows, then compaction produces one stored function.
 
 \section{API and integration boundaries}
-The \texttt{binaml.models} package owns the online model and has no
-environment dependency: the goal is a generic model, decoupled from where the
-data comes from and how it was produced.  The public surface is
-\texttt{BRegressor}, which implements
-\texttt{predict(features)} and \texttt{observe(features, target)} for binary
-feature vectors of width $d$.  The prediction call may retain pairing state;
-\texttt{observe} must follow a preceding \texttt{predict}.  Feature learning
-is internal to \texttt{observe} once a batch fills.  Evaluation packages
-compose models with environments through predict-then-observe prequential
+The \texttt{binaml.models} package owns the online models and has no
+environment dependency: the goal is generic models, decoupled from where the
+data comes from and how it was produced.  The public surfaces are
+\texttt{BRegressor} and \texttt{BClassifier}, which implement
+\texttt{predict(features)} and \texttt{update(target)} for binary
+feature vectors of width $d$.  The prediction call retains pairing state;
+\texttt{update} must follow a preceding \texttt{predict} and applies the
+revealed target to that stored step.  Feature learning
+is internal to \texttt{update} once a batch fills.  Evaluation packages
+compose models with environments through predict-then-update prequential
 evaluation.  Named benchmarks only compose these independent components.
 
 \section{Prequential evaluation protocol}
-For each emitted $(x_t,y_t)$, an evaluator first records the model
-prediction, then exposes the target through \texttt{observe}.  Mean squared
-error is computed from the recorded pre-update predictions.  Structure
-updates occur only after a full feature batch fills inside \texttt{observe};
-residual signs are measured with the current weights before the corresponding
-linear updates.
+For each emitted sample, an evaluator first records the model prediction, then
+exposes the target through \texttt{update}.  Regression benchmarks compute
+mean squared error from the recorded pre-update predictions; classification
+benchmarks compute accuracy from the recorded pre-update class predictions.
+Structure updates occur only after a full feature batch fills inside
+\texttt{update}; residual signs are measured with the current head parameters
+before the corresponding updates.
 Hyperparameters, implementation version, and the online protocol are required
 to interpret any reported trajectory.
 
 \section{Evaluation}
-The benchmark inputs and model configuration are versioned in this paper's
-benchmark directory.  The task uses 1,000 observations and seeds
+The benchmark inputs and model configurations are versioned in this paper's
+benchmark directory.
+
+\subsection{Regression}
+The regression task uses 1,000 observations and seeds
 $\{0,1,2,3,4\}$ with 32 input bits,
 12 fixed target components, noise standard deviation $0.1$, and the same
 function, DAG, and target-scale settings.  Input, gate, and intercept
@@ -329,20 +368,16 @@ $\eta=5\times10^{-3}$, $\ell_2$ decay $10^{-4}$, feature batch size $B=16$,
 five single-sample SGD steps, parent top-$K=8$, builder depth
 $L_{\max}=3$, and ensemble capacity $K_{\max}=64$.  Each stored function
 enters the linear head as $2f_k(x)-1$.  The linear baseline is a
-Python+NumPy replay-batch implementation using learning rate $0.03$, the same
+JAX replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
-baseline is a Scikit-learn wrapper using replay size 32 and three
-\texttt{partial\_fit} passes; one 50-unit ReLU hidden layer; scikit-learn SGD
-with constant learning rate $0.003$, $\alpha=10^{-4}$,
-\texttt{power\_t}=0.5, shuffling enabled, random state zero, tolerance
-$10^{-4}$, zero momentum, no Nesterov momentum, and no early stopping.  Its
-remaining configured values are validation fraction $0.1$, $\beta_1=0.9$,
-$\beta_2=0.999$, $\epsilon=10^{-8}$, 10 no-change iterations, and disabled
-verbose output; the wrapper fixes one iteration and disables warm start.
+baseline is a JAX one-hidden-layer ReLU network using replay size 32 and three
+full-batch SGD steps; one 50-unit hidden layer; constant learning rate
+$0.003$, $\alpha=10^{-4}$, and random state zero.  Linear and MLP baselines
+share the same float32 replay SGD scaffold.
 
 Tables report the mean $\pm$ standard error over five seeds.  MSE is the
 optimized loss; RMSE expresses the same error in target units.  Total time is
-the prequential predict-plus-observe time for a 1,000-sample trajectory.
+the prequential predict-plus-update time for a 1,000-sample trajectory.
 
 \begin{center}
 \footnotesize
@@ -351,18 +386,30 @@ the prequential predict-plus-observe time for a 1,000-sample trajectory.
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
 BRegressor (ours) & $\boldsymbol{0.408\pm0.018}$ & $\boldsymbol{0.639\pm0.014}$ & $\boldsymbol{0.064\pm0.012}$ \\
-Linear SGD (Python+NumPy) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
-MLP SGD (Scikit-learn) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
+Linear SGD (JAX) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
+MLP SGD (JAX) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
 \hline
 \end{tabular}
 \end{center}
 
+\subsection{Classification}
+The classification task uses the same input width, component count, noise
+standard deviation, drift probabilities, and function settings as the
+regression default, with three classes and per-class gates, weights, and
+intercepts.  Scenario and model entries are versioned in
+\texttt{benchmarks/scenarios/default\_multiclass.json} and
+\texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
+the same structural hyperparameters as \texttt{BRegressor}; linear and MLP
+classifier baselines mirror their regression counterparts with softmax
+cross-entropy.  Reported comparisons use prequential accuracy over the same
+seed set after optional warm-up exclusion.
+
 \section{Limitations and scope}
-This document specifies the ensemble regressor used by Binaml.  It does not
+This document specifies the ensemble models used by Binaml.  It does not
 claim optimality of residual-sign learning or in-sample function selection.
 Ensemble churn at capacity can drop zero-weight experts that remain useful on
 past batches; in-sample output selection trades hold-out promotion for simpler
-batch boundaries.  The reported comparison is limited to the versioned
-synthetic task, fixed configurations, and reproducible baseline runs described
-above.
+batch boundaries.  The reported regression comparison is limited to the
+versioned synthetic task, fixed configurations, and reproducible baseline runs
+described above.
 \end{document}
