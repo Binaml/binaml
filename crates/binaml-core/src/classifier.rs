@@ -117,7 +117,8 @@ mod tests {
     use super::BClassifier;
 
     fn model(batch_size: usize, max_functions: usize) -> BClassifier {
-        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 2, 1, max_functions).unwrap()
+        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 2, 1, max_functions)
+            .unwrap()
     }
 
     fn step(model: &mut BClassifier, features: &[bool], target: usize) {

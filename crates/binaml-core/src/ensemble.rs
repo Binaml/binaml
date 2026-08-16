@@ -94,7 +94,11 @@ pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
 }
 
 impl<H: EnsembleHead> BooleanEnsemble<H> {
-    pub fn new(source_feature_count: usize, head: H, config: EnsembleConfig) -> Result<Self, EnsembleError> {
+    pub fn new(
+        source_feature_count: usize,
+        head: H,
+        config: EnsembleConfig,
+    ) -> Result<Self, EnsembleError> {
         config.validate(source_feature_count)?;
         Ok(Self {
             config,
@@ -136,7 +140,10 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
 
     pub fn update(&mut self, target: H::Target) -> Result<(), EnsembleError> {
         self.head.validate_target(target)?;
-        let pending = self.pending.take().ok_or(EnsembleError::NoPendingPrediction)?;
+        let pending = self
+            .pending
+            .take()
+            .ok_or(EnsembleError::NoPendingPrediction)?;
         self.n_observed += 1;
 
         let sign = self.head.batch_sign(target, &pending.function_values);
@@ -349,12 +356,7 @@ impl EnsembleHead for ClassificationHead {
                     .iter()
                     .map(|weight| weight.abs())
                     .sum::<f64>()
-                    .total_cmp(
-                        &right_weights
-                            .iter()
-                            .map(|weight| weight.abs())
-                            .sum::<f64>(),
-                    )
+                    .total_cmp(&right_weights.iter().map(|weight| weight.abs()).sum::<f64>())
                     .then_with(|| left_index.cmp(right_index))
             })
             .map(|(index, _)| index)
@@ -373,7 +375,10 @@ fn argmax(values: &[f64]) -> usize {
 
 fn softmax(logits: &[f64]) -> Vec<f64> {
     let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let mut probabilities: Vec<f64> = logits.iter().map(|logit| (logit - max_logit).exp()).collect();
+    let mut probabilities: Vec<f64> = logits
+        .iter()
+        .map(|logit| (logit - max_logit).exp())
+        .collect();
     let normalizer = probabilities.iter().sum::<f64>();
     if normalizer > 0.0 {
         for probability in &mut probabilities {

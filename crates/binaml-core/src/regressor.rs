@@ -31,7 +31,10 @@ pub struct BRegressor {
 }
 
 impl BRegressor {
-    pub(crate) fn new(source_feature_count: usize, config: EnsembleConfig) -> Result<Self, BRegressorError> {
+    pub(crate) fn new(
+        source_feature_count: usize,
+        config: EnsembleConfig,
+    ) -> Result<Self, BRegressorError> {
         Ok(Self {
             ensemble: BooleanEnsemble::new(source_feature_count, RegressionHead::new(), config)?,
         })
@@ -155,7 +158,10 @@ mod tests {
     #[test]
     fn update_requires_preceding_predict() {
         let mut model = model(2, 8);
-        assert_eq!(model.update(-1.0), Err(super::BRegressorError::NoPendingPrediction));
+        assert_eq!(
+            model.update(-1.0),
+            Err(super::BRegressorError::NoPendingPrediction)
+        );
         model.predict(&[false, false]).unwrap();
         assert_eq!(
             model.predict(&[true, false]),
