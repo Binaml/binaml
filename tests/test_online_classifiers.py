@@ -5,7 +5,6 @@ import pytest
 from binaml.benchmarks.synthetic_streaming_classification.cli import (
     _load_model_config,
     _record,
-    _warmup_samples,
 )
 from binaml.evaluation import EvaluationTiming, PrequentialClassificationResult
 from binaml.models import BClassifier, MLPClassifier, SGDLinearClassifier

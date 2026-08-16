@@ -2,8 +2,10 @@ version = 1
 revision = 2
 requires-python = ">=3.13"
 resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
+    "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version >= '3.14' and platform_machine != 'x86_64') or (python_full_version >= '3.14' and sys_platform != 'darwin')",
+    "python_full_version < '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version < '3.14' and platform_machine != 'x86_64') or (python_full_version < '3.14' and sys_platform != 'darwin')",
 ]
 
 [[package]]
@@ -39,7 +41,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jax", marker = "extra == 'benchmarks'", specifier = ">=0.4.35,<0.5" },
+    { name = "jax", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin' and extra == 'benchmarks'", specifier = ">=0.4.35,<0.5" },
+    { name = "jax", marker = "(platform_machine != 'x86_64' and extra == 'benchmarks') or (sys_platform != 'darwin' and extra == 'benchmarks')", specifier = ">=0.4.35" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "optax", marker = "extra == 'benchmarks'", specifier = ">=0.2" },
     { name = "seaborn", marker = "extra == 'benchmarks'", specifier = ">=0.13" },
@@ -48,7 +51,8 @@ provides-extras = ["benchmarks"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "jax", specifier = ">=0.4.35,<0.5" },
+    { name = "jax", marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'", specifier = ">=0.4.35" },
+    { name = "jax", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'", specifier = ">=0.4.35,<0.5" },
     { name = "optax", specifier = ">=0.2" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.12" },

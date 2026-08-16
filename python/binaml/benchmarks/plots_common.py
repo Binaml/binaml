@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-
 DRIFT_TYPES = (
     ("input_distribution_sampling_indicator", "input distribution", "#2E7D32"),
     ("gate_distribution_sampling_indicator", "gate distribution", "#7B4F9E"),

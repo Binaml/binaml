@@ -7,7 +7,6 @@ pytest.importorskip("jax")
 def test_mse_decreases_on_a_linear_batch() -> None:
     import jax
     import jax.numpy as jnp
-
     from binaml.models.jax.linear import init_linear, linear_forward
     from binaml.models.jax.losses import mse
 
@@ -29,7 +28,6 @@ def test_mse_decreases_on_a_linear_batch() -> None:
 
 def test_softmax_cross_entropy_is_finite() -> None:
     import jax.numpy as jnp
-
     from binaml.models.jax.linear import init_linear, linear_forward
     from binaml.models.jax.losses import softmax_cross_entropy
 
@@ -42,7 +40,6 @@ def test_softmax_cross_entropy_is_finite() -> None:
 
 def test_mlp_forward_shapes() -> None:
     import jax.numpy as jnp
-
     from binaml.models.jax.mlp import init_mlp, mlp_forward
 
     params, _mask = init_mlp(3, (4,), 2, random_state=0)
@@ -52,7 +49,6 @@ def test_mlp_forward_shapes() -> None:
 
 def test_linear_init_is_float32_zeros() -> None:
     import jax.numpy as jnp
-
     from binaml.models.jax.linear import init_linear
 
     params, mask = init_linear(3, 1)

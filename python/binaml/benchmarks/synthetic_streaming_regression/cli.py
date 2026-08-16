@@ -16,7 +16,6 @@ import numpy as np
 
 from binaml.benchmarks._common import (
     aggregate,
-    load_factory,
     load_model_config,
     load_models,
     model_entries,

@@ -32,7 +32,7 @@ class ReplayBatch:
         self.features: deque[np.ndarray] = deque(maxlen=batch_size)
         self.targets: deque[float | int] = deque(maxlen=batch_size)
 
-    def append(self, features: np.ndarray, target: float | int) -> None:
+    def append(self, features: np.ndarray, target: float) -> None:
         self.features.append(features.copy())
         self.targets.append(target)
 

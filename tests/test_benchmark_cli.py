@@ -7,6 +7,8 @@ from binaml.benchmarks.synthetic_streaming_regression.cli import (
     _load_model_config,
     _record,
     _warmup_samples,
+)
+from binaml.benchmarks.synthetic_streaming_regression.cli import (
     main as regression_main,
 )
 from binaml.evaluation import EvaluationTiming, PrequentialResult

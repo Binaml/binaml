@@ -9,7 +9,7 @@ from .jax.replay import ReplayJAXModel
 
 def _hidden_layer_sizes(value: int | Sequence[int]) -> tuple[int, ...]:
     if isinstance(value, bool):
-        raise ValueError("invalid hidden_layer_sizes")
+        raise TypeError("invalid hidden_layer_sizes")
     if isinstance(value, int):
         sizes = (value,)
     else:

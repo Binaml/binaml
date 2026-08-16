@@ -15,7 +15,7 @@ def test_package_version_matches_installed_distribution() -> None:
 
 
 def test_models_package_imports_without_instantiating_baselines() -> None:
-    import binaml.models as models
+    from binaml import models
 
     assert models.BRegressor is BRegressor
     assert models.SGDLinearRegressor is SGDLinearRegressor

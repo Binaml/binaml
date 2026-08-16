@@ -25,7 +25,11 @@ from binaml.environments import (
     SyntheticClassificationStreamConfig,
     generate_classification_trajectory,
 )
-from binaml.evaluation import EvaluationTiming, PrequentialClassificationResult, evaluate_prequentially_classification
+from binaml.evaluation import (
+    EvaluationTiming,
+    PrequentialClassificationResult,
+    evaluate_prequentially_classification,
+)
 from binaml.models import SGDLinearClassifier
 
 ModelFactory = Callable[[int, int], object]
