@@ -4,8 +4,8 @@ title: "Binaml: Continual Learning for Binary Streaming Features"
 authors:
   - family-names: Zimmer
     given-names: Romain
-version: "0.1.0-alpha.2"
-date-released: 2026-08-12
+version: "0.1.0-alpha.3"
+date-released: 2026-08-16
 type: software
 license: Apache-2.0
 repository-code: "https://github.com/binaml/binaml"

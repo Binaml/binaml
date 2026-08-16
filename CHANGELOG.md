@@ -4,6 +4,8 @@ All notable changes to Binaml are documented here.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-08-16
+
 ### Added
 - Internal function-learning pipeline: `FunctionBuilder`, ephemeral-to-compact
   lowering, and immutable `FunctionGraph` storage for learned boolean functions.
