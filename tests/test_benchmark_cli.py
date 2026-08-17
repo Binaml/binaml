@@ -3,11 +3,8 @@ import sys
 
 import numpy as np
 import pytest
-from binaml.benchmarks.synthetic_streaming_regression.cli import (
-    _load_model_config,
-    _record,
-    _warmup_samples,
-)
+from binaml.benchmarks.scenario import warmup_samples as get_warmup_samples
+from binaml.benchmarks.synthetic_streaming_regression.cli import load_model_config, record
 from binaml.benchmarks.synthetic_streaming_regression.cli import (
     main as regression_main,
 )
@@ -32,7 +29,7 @@ def test_model_config_creates_models_with_configured_parameters(tmp_path) -> Non
         encoding="utf-8",
     )
 
-    models, config = _load_model_config(path)
+    models, config = load_model_config(path)
 
     sgd = models["sgd-lr-1e-3"](3)
     assert isinstance(sgd, SGDLinearRegressor)
@@ -58,7 +55,7 @@ def test_model_config_cannot_override_feature_count(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="n_features"):
-        _load_model_config(path)
+        load_model_config(path)
 
 
 def test_warmup_is_excluded_from_reported_metrics() -> None:
@@ -69,22 +66,22 @@ def test_warmup_is_excluded_from_reported_metrics() -> None:
         timing_seconds=EvaluationTiming(0.0, 0.0, 0.0),
     )
 
-    record = _record(0, result, warmup_samples=1)
+    payload = record(0, result, warmup_samples=1)
 
-    assert record["mse"] == 6.5
-    assert record["rmse"] == pytest.approx(np.sqrt(6.5))
+    assert payload["mse"] == 6.5
+    assert payload["rmse"] == pytest.approx(np.sqrt(6.5))
 
 
-@pytest.mark.parametrize("warmup_samples", [-1, 10])
-def test_warmup_must_be_a_non_negative_prefix(warmup_samples) -> None:
+@pytest.mark.parametrize("warmup_value", [-1, 10])
+def test_warmup_must_be_a_non_negative_prefix(warmup_value) -> None:
     with pytest.raises(ValueError, match="warmup_samples"):
-        _warmup_samples({"n_samples": 10, "warmup_samples": warmup_samples})
+        get_warmup_samples({"n_samples": 10, "warmup_samples": warmup_value})
 
 
-@pytest.mark.parametrize("warmup_samples", [True, 1.5])
-def test_warmup_must_be_an_integer(warmup_samples) -> None:
+@pytest.mark.parametrize("warmup_value", [True, 1.5])
+def test_warmup_must_be_an_integer(warmup_value) -> None:
     with pytest.raises(TypeError, match="warmup_samples"):
-        _warmup_samples({"n_samples": 10, "warmup_samples": warmup_samples})
+        get_warmup_samples({"n_samples": 10, "warmup_samples": warmup_value})
 
 
 def _tiny_regression_scenario(tmp_path) -> object:

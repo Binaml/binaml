@@ -2,10 +2,7 @@ import json
 
 import numpy as np
 import pytest
-from binaml.benchmarks.synthetic_streaming_classification.cli import (
-    _load_model_config,
-    _record,
-)
+from binaml.benchmarks.synthetic_streaming_classification.cli import load_model_config, record
 from binaml.evaluation import EvaluationTiming, PrequentialClassificationResult
 from binaml.models import BClassifier, MLPClassifier, SGDLinearClassifier
 
@@ -27,7 +24,7 @@ def test_model_config_creates_models_with_configured_parameters(tmp_path) -> Non
         encoding="utf-8",
     )
 
-    models, config = _load_model_config(path)
+    models, config = load_model_config(path)
 
     classifier = models["sgd-lr-1e-3"](3, 4)
     assert isinstance(classifier, SGDLinearClassifier)
@@ -52,7 +49,7 @@ def test_model_config_cannot_override_dimensions(tmp_path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="n_features"):
-        _load_model_config(path)
+        load_model_config(path)
 
     path.write_text(
         json.dumps(
@@ -69,7 +66,7 @@ def test_model_config_cannot_override_dimensions(tmp_path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="n_classes"):
-        _load_model_config(path)
+        load_model_config(path)
 
 
 def test_warmup_is_excluded_from_reported_metrics() -> None:
@@ -80,9 +77,9 @@ def test_warmup_is_excluded_from_reported_metrics() -> None:
         timing_seconds=EvaluationTiming(0.0, 0.0, 0.0),
     )
 
-    record = _record(0, result, warmup_samples=1)
+    payload = record(0, result, warmup_samples=1)
 
-    assert record["accuracy"] == 0.5
+    assert payload["accuracy"] == 0.5
 
 
 def test_sgd_classifier_predict_then_update() -> None:

@@ -1,0 +1,26 @@
+{
+  "name": "default",
+  "n_train": 255,
+  "n_test": 255,
+  "seeds": [0, 1, 2, 3, 4],
+  "environment": {
+    "schema_version": 4,
+    "n_features": 32,
+    "q_max": 0,
+    "p_min": 0.1,
+    "p_max": 0.9,
+    "truth_table_function_probability": 1.0,
+    "min_truth_table_function_arity": 1,
+    "max_truth_table_function_arity": 6,
+    "p_activation_min": 0.2,
+    "p_activation_max": 0.8
+  },
+  "p_noise": 0.0,
+  "learners": {
+    "function_builder": {"parent_top_k": 8, "max_layers": 4}
+  },
+  "grid": {
+    "p_activation_min": [0.2, 0.5],
+    "p_min": [0.1, 0.5]
+  }
+}

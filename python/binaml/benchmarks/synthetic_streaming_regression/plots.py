@@ -110,3 +110,51 @@ def write_aggregate_scatter(path: Path, metrics: dict[str, dict[str, object]]) -
     axis.legend(handles=legend_handles, title="Metrics", loc="center left", bbox_to_anchor=(1.02, 0.5))
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
+
+
+def write_job_plots(
+    output_dir: Path,
+    source_argument: str,
+    source_path: Path,
+    completed: list[dict[str, object]],
+    metrics: dict[str, dict[str, object]],
+) -> None:
+    from binaml.benchmarks.scenario import load_scenario, warmup_samples
+    from binaml.environments import SyntheticStreamConfig, generate_trajectory
+    from binaml.evaluation import EvaluationTiming, PrequentialResult
+
+    records_by_seed: dict[int, dict[str, dict[str, object]]] = {}
+    for job in completed:
+        records_by_seed.setdefault(int(job["seed"]), {})[str(job["model"])] = job["result"]  # type: ignore[index]
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir()
+    scenario = load_scenario(source_path) if source_argument == "--scenario" else None
+    warmup = warmup_samples(scenario) if scenario is not None else 0
+    for seed, records in records_by_seed.items():
+        trajectory = (
+            generate_trajectory(
+                SyntheticStreamConfig.from_dict(scenario["environment"]),
+                int(scenario["n_samples"]),
+                seed,
+                return_metadata=True,
+            )
+            if scenario is not None
+            else Trajectory.load_npz(source_path)
+        )
+        evaluations = {
+            name: PrequentialResult(
+                np.asarray(record["predictions"]),
+                trajectory.y,
+                np.asarray(record["squared_errors"]),
+                EvaluationTiming(**record["timing_seconds"]),  # type: ignore[arg-type]
+            )
+            for name, record in records.items()
+        }
+        write_rmse_plot(plots_dir / f"rmse_seed_{seed}.png", trajectory, evaluations, warmup)
+        for (model_name, evaluation), color in zip(
+            evaluations.items(), sns.color_palette("colorblind", n_colors=len(evaluations)), strict=True
+        ):
+            model_dir = plots_dir / model_name.replace("/", "_")
+            model_dir.mkdir(exist_ok=True)
+            write_model_plot(model_dir / f"seed_{seed}.png", trajectory, model_name, evaluation, color, warmup)
+    write_aggregate_scatter(plots_dir / "model_comparison.png", metrics)

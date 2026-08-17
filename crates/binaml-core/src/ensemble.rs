@@ -1,6 +1,7 @@
 use crate::function_compact::CompactError;
 use crate::{
-    compact, FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
+    compact, BuildNodeId, EphemeralNode, FunctionBuildConfig, FunctionBuildError, FunctionBuilder,
+    FunctionGraph, SignBatch,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -181,8 +182,19 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
             feature_columns: &column_refs,
             signs: &self.feature_batch_signs,
         };
-        let (ephemeral, output) = FunctionBuilder::build(batch, self.config.build_config())?;
-        let graph = compact(ephemeral, output)?;
+        let model = FunctionBuilder::build(batch, self.config.build_config())?;
+        let mut graph = model.graph;
+        let mut output = model.output;
+        if model.invert_output {
+            let id = BuildNodeId(graph.nodes.len());
+            graph.nodes.push(EphemeralNode::Composed {
+                first: output,
+                second: output,
+                truth_table: 0b0011,
+            });
+            output = id;
+        }
+        let graph = compact(graph, output)?;
         self.functions.push(graph);
         self.head.append_function();
         if self.functions.len() > self.config.max_functions {
@@ -213,7 +225,7 @@ impl RegressionHead {
             + function_values
                 .iter()
                 .zip(&self.weights)
-                .map(|(value, weight)| weight * (2.0 * f64::from(*value) - 1.0))
+                .map(|(value, weight)| weight * f64::from(*value))
                 .sum::<f64>()
     }
 }
@@ -242,8 +254,7 @@ impl EnsembleHead for RegressionHead {
         }
         self.intercept += rate * error;
         for (weight, value) in self.weights.iter_mut().zip(function_values) {
-            let centered = 2.0 * f64::from(*value) - 1.0;
-            *weight += rate * error * centered;
+            *weight += rate * error * f64::from(*value);
         }
     }
 
@@ -293,9 +304,9 @@ impl ClassificationHead {
     pub fn logits(&self, function_values: &[bool]) -> Vec<f64> {
         let mut logits = self.intercepts.clone();
         for (class_weights, value) in self.weights.iter().zip(function_values) {
-            let centered = 2.0 * f64::from(*value) - 1.0;
+            let activation = f64::from(*value);
             for (logit, weight) in logits.iter_mut().zip(class_weights) {
-                *logit += weight * centered;
+                *logit += weight * activation;
             }
         }
         logits
@@ -331,10 +342,10 @@ impl EnsembleHead for ClassificationHead {
             *intercept -= rate * error;
         }
         for (class_weights, value) in self.weights.iter_mut().zip(function_values) {
-            let centered = 2.0 * f64::from(*value) - 1.0;
+            let activation = f64::from(*value);
             for (class_index, weight) in class_weights.iter_mut().enumerate() {
                 let error = probabilities[class_index] - f64::from(class_index == target);
-                *weight -= rate * error * centered;
+                *weight -= rate * error * activation;
             }
         }
     }

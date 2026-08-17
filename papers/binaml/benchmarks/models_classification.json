@@ -3,7 +3,12 @@
     {
       "name": "BClassifier",
       "factory": "binaml.models:BClassifier",
-      "parameters": {}
+      "parameters": {
+        "learning_rate": 0.12,
+        "l2": 0.0005,
+        "batch_size": 12,
+        "sgd_steps": 30
+      }
     },
     {
       "name": "SGDLinearClassifier",

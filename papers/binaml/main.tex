@@ -144,15 +144,31 @@ time $t$.  The prediction is
 b
 +
 \sum_{k=1}^{K_t}
-w_k\,\bigl(2f_k(x_t)-1\bigr),
+w_k\,f_k(x_t),
 \]
 where $b\in\mathbb R$, each $w_k\in\mathbb R$, and each
-$f_k(x_t)\in\{0,1\}$ is centered before entering the linear head:
+$f_k(x_t)\in\{0,1\}$.
+Each $f_k$ is a compact boolean function built from one residual-sign batch.
+Feature learning consumes a binary supervision bit derived from the scalar
+target.  With pre-update prediction $\hat y_t$, the residual is
+$e_t=y_t-\hat y_t$ and the sign appended to the current feature batch is
 \[
-2f_k(x_t)-1\in\{-1,1\}.
+s_t=\mathbf{1}\{e_t\geq 0\}.
 \]
-Each $f_k$ is a compact boolean function built from one residual-sign batch,
-not a node in a shared graph.
+This bit is computed with the current head parameters before the linear
+updates on step~t.
+
+\paragraph{Weight updates.}
+For one SGD step with learning rate $\eta>0$ and decay $\lambda\geq 0$, first
+apply $\ell_2$ decay to every stored weight, then update the intercept and
+weights from the pre-step residual:
+\begin{align*}
+w_k &\leftarrow (1-\eta\lambda)\,w_k
+&&\text{for all stored }k,\\
+b &\leftarrow b+\eta e_t,\\
+w_k &\leftarrow w_k+\eta e_t f_k(x_t).
+\end{align*}
+Each observation performs $S$ such steps on the same activation row.
 
 \subsection{Classification head}
 The classifier receives $x_t\in\{0,1\}^d$ and later observes a class label
@@ -164,28 +180,49 @@ batch finalizations through time $t$.  For each class $c$, logits are
 b_c
 +
 \sum_{k=1}^{K_t}
-w_{k,c}\,\bigl(2f_k(x_t)-1\bigr),
+w_{k,c}\,f_k(x_t),
 \]
 where $b_c\in\mathbb R$ and each $w_{k,c}\in\mathbb R$.  The predicted class
 is $\hat c_t=\operatorname*{argmax}_c \ell_{t,c}$, with ties broken toward the
-smallest index.  Residual-sign supervision for feature learning compares the
-target class logit to the largest competing logit before the corresponding
-linear updates.
+smallest index.
+Feature learning consumes a binary supervision bit derived from the class label.
+With pre-update prediction $\hat c_t$, the sign appended to the current
+feature batch is the misclassification indicator
+\[
+s_t=\mathbf{1}\{\hat c_t\neq y_t\}.
+\]
+This bit is computed with the current head parameters before the linear
+updates on step~t.
 
-\paragraph{Composed features.}
+\paragraph{Weight updates.}
+Let $p_{t,c}=\operatorname{softmax}(\ell_t)_c$ be the pre-step class
+probabilities.  For one SGD step on softmax cross-entropy with learning rate
+$\eta>0$ and decay $\lambda\geq 0$, define the class errors
+$\delta_{t,c}=p_{t,c}-\mathbf{1}\{c=y_t\}$.  First apply $\ell_2$ decay to
+every stored weight, then update intercepts and weights:
+\begin{align*}
+w_{k,c} &\leftarrow (1-\eta\lambda)\,w_{k,c}
+&&\text{for all stored }k,c,\\
+b_c &\leftarrow b_c-\eta\,\delta_{t,c},\\
+w_{k,c} &\leftarrow w_{k,c}-\eta\,\delta_{t,c}\,f_k(x_t).
+\end{align*}
+Each observation performs $S$ such steps on the same activation row.
+
+\section{Building stored functions}
 Composition starts from the most basic nontrivial boolean learning unit:
 two-input tables.  Combining them yields richer features without beginning
 from high-arity search.  A composed node combines two parent activations using
 a four-bit truth table $T\in\{0,\ldots,15\}$.
 
-\section{Feature representation and batch learning}
+\subsection{Feature representation and batch learning}
 Each feature batch grows an ephemeral wide DAG: layer zero holds the $d$ source
 bits; at each subsequent layer the builder forms every distinct pair among the
-top-$K$ parent nodes by in-sample match score, learns a truth table on the
+top-$K$ parent nodes by descending $|\text{assoc}|$, learns a truth table on the
 current batch, and appends the resulting node.  Depth never exceeds $L_{\max}$.
 When the batch fills, the builder selects one output node by descending
-in-sample accuracy, then depth, then node id, compacts the subgraph into a
-\texttt{FunctionGraph}, and appends it to the ensemble with weight zero.  If the
+in-sample accuracy, then depth, then node id, inverting the output bit when the
+inverted node is more accurate on $\mathcal B_n$.  The subgraph is compacted
+into a \texttt{FunctionGraph} and appended to the ensemble with weight zero.  If the
 ensemble exceeds capacity $K_{\max}$, the function with smallest
 $|w_k|$ is removed, breaking ties toward the oldest index.  There is no
 hold-out batch and no shared candidate queue across batches.
@@ -215,40 +252,11 @@ $B\leq255$.
 \end{tabular}
 \end{center}
 
-\section{Online head updates}
-Function identity is discrete; head parameters are continuous, so the two are
-updated separately.  For regression, each observation $(x_t,y_t)$ evaluates the
-current stored functions once, computes the residual sign with the current
-weights, then performs $S$ single-sample squared-error gradient steps on that
-activation row.  For classification, each observation evaluates the current
-functions once, computes the residual sign from the target-class logit relative
-to the strongest competitor, then performs $S$ single-sample softmax
-cross-entropy gradient steps on that activation row.  In both models the newly
-appended function at a batch boundary is excluded from SGD on the batch-fill
-step because it is added only after those updates.  For one regression step
-with pre-step residual $e_t=y_t-\hat y_t$, learning rate $\eta>0$, and decay
-$\lambda\geq 0$, apply
-\begin{align*}
-w_k &\leftarrow (1-\eta\lambda)\,w_k
-&&\text{for all stored }k,\\
-b &\leftarrow b+\eta e_t,\\
-w_k &\leftarrow w_k+\eta e_t\bigl(2f_k(x_t)-1\bigr).
-\end{align*}
-There is no gradient through boolean structure: SGD tracks residual amplitude
-at the sample level, while structure search runs when enough residual-sign
-evidence exists.  The residual sign
-\[
-s_t=\mathbf{1}\{e_t\geq 0\}
-\]
-is computed with the current weights before the associated linear updates and
-appended to the current feature batch.  After every $B$ new observations, that
-batch is consumed to grow, select, compact, and append one function, then
-cleared.
-
-\section{Residual-sign supervision and batching}
-Feature learning targets residual signs, not $y_t$ itself.  Residual signs are
-a binary supervision bit for the discrete builder, while the linear head absorbs
-magnitude.  Exact truth-table counting needs a bounded window; batching
+\subsection{Residual-sign supervision and batching}
+Feature learning targets binary supervision bits, not the task target
+directly.  Each head maps its target to $s_t\in\{0,1\}$ as above; the builder
+treats $s_t$ as a binary label while the linear head absorbs magnitude or
+class structure.  Exact truth-table counting needs a bounded window; batching
 amortizes graph growth.  Batch $n$ is
 \[
 \mathcal B_n
@@ -261,15 +269,20 @@ structural update.  Processing $\mathcal B_n$ grows an ephemeral graph, selects
 one output by in-sample accuracy, compacts it, appends $(f,w=0)$ to the
 ensemble, and prunes to $K_{\max}$ if needed.  There is no hold-out batch.
 
-\paragraph{Match score.}
-For a boolean stream $z_{1:B}$ and residual signs $s_{1:B}$,
+\paragraph{Association score.}
+For a boolean stream $z_{1:B}$ and residual signs $s_{1:B}$, let
+$N=B$, $N_x=\sum_i z_i$, $N_y=\sum_i s_i$, and
+$N_{xy}=\sum_i z_i s_i$.  Define
 \[
-\sigma=\sum_{i=1}^{B}\mathbf{1}\{z_i=s_i\}.
+\text{assoc}(z,s)=N\,N_{xy}-N_x N_y.
 \]
+Parent nodes are ranked by $|\text{assoc}(z,s)|$, breaking ties by node id.
 Sources use their coordinate columns; composed nodes use their evaluated
-bitstreams.
+bitstreams.  Negation at layer zero is not materialized as separate nodes:
+anti-correlated sources rank highly on $|\text{assoc}|$, and output polarity
+flip handles $\neg x_i$ when it improves in-sample accuracy.
 
-\section{Truth-table learning}
+\subsection{Truth-table learning}
 Given two parent bitstreams $u_{1:B}$, $v_{1:B}$ and residual signs
 $s_{1:B}$, the learner returns the Hamming-error-minimizing four-bit table.
 Its state is a fixed array of eight \texttt{u8} counters, one for each
@@ -279,23 +292,38 @@ the frequencies needed to select each table output by majority, with ties
 resolving to zero.  As one counter may receive every observation, the
 \texttt{u8} counters bound the admissible batch size to $B\leq255$.
 
-\section{Batch graph growth}
+\subsection{Batch graph growth}
 For each layer $\ell=1,\ldots,L_{\max}$:
 \begin{enumerate}
-  \item Let $P$ be the top-$K$ nodes in layer $\ell-1$ by in-sample match
-  score, breaking ties by node id.
+  \item Let $P$ be the top-$K$ nodes in layer $\ell-1$ by $|\text{assoc}|$,
+  breaking ties by node id.
   \item Form every distinct pair in $P$.
   \item For each pair, learn a truth table on $\mathcal B_n$ and append the
   resulting composed node to layer $\ell$.
 \end{enumerate}
 If $P$ has fewer than two nodes, layer $\ell$ is skipped.  After all layers, the
-builder selects the output node by descending match score, then depth, then id.
+builder selects the output node by descending in-sample accuracy, then depth,
+then id, inverting the output when that improves accuracy on $\mathcal B_n$.
 
-\section{Ensemble pruning}
+\subsection{Ensemble pruning}
 When appending a new function would exceed $K_{\max}$, remove the stored index
 with smallest $|w_k|$, breaking ties toward the oldest index.  Zero-weight
 experts can therefore rotate at capacity even when still structurally useful on
 past batches.
+
+\section{Online head updates}
+Function identity is discrete; head parameters are continuous, so the two are
+updated separately.  For each observation, \texttt{predict} evaluates the
+current stored functions once; \texttt{update} then computes the head-specific
+supervision bit $s_t$, appends $(x_t,s_t)$ to the current feature batch, and
+performs $S$ single-sample gradient steps on that activation row using the
+task-specific rules above.  In both models the newly appended function at a
+batch boundary is excluded from SGD on the batch-fill step because it is added
+only after those updates.  There is no gradient through boolean structure: SGD
+tracks task loss at the sample level, while structure search runs when enough
+supervision bits have accumulated.  After every $B$ new observations, the
+batch is consumed to grow, select, compact, and append one function, then
+cleared.
 
 \section{Online learning procedure}
 \noindent\textbf{Configuration}
@@ -311,12 +339,12 @@ feature-batch buffers.
 
 \noindent\textbf{For} each observation $(x_t,y_t)$:
 \begin{enumerate}
-  \item Validate the input width and finite target.
-  \item Evaluate stored $f_k(x_t)$ and predict
-  $\hat y_t=b+\sum_k w_k(2f_k(x_t)-1)$.
-  \item Compute $s_t=\mathbf{1}\{y_t-\hat y_t\geq 0\}$ and append $(x_t,s_t)$
-  to the current feature batch.
-  \item Apply $S$ single-sample linear updates using the current activation row.
+  \item Validate the input width and task target.
+  \item Evaluate stored $f_k(x_t)$ and form the task prediction
+  ($\hat y_t$ or $\hat c_t$).
+  \item Compute the head-specific supervision bit $s_t$ and append
+  $(x_t,s_t)$ to the current feature batch.
+  \item Apply $S$ single-sample head updates using the current activation row.
   \item After $B$ accumulated observations, grow a graph on the batch, select and
   compact one output, append it with weight zero, prune to $K_{\max}$ if needed,
   and clear the feature batch.
@@ -364,10 +392,10 @@ function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
-$\eta=5\times10^{-3}$, $\ell_2$ decay $10^{-4}$, feature batch size $B=16$,
-five single-sample SGD steps, parent top-$K=8$, builder depth
+$\eta=3\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$, feature batch size
+$B=16$, twenty single-sample SGD steps, parent top-$K=8$, builder depth
 $L_{\max}=3$, and ensemble capacity $K_{\max}=64$.  Each stored function
-enters the linear head as $2f_k(x)-1$.  The linear baseline is a
+enters the linear head as $f_k(x)\in\{0,1\}$.  The linear baseline is a
 JAX replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
 baseline is a JAX one-hidden-layer ReLU network using replay size 32 and three
@@ -385,9 +413,9 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $\boldsymbol{0.408\pm0.018}$ & $\boldsymbol{0.639\pm0.014}$ & $\boldsymbol{0.064\pm0.012}$ \\
-Linear SGD (JAX) & $0.745\pm0.015$ & $0.863\pm0.008$ & $0.172\pm0.005$ \\
-MLP SGD (JAX) & $0.842\pm0.024$ & $0.917\pm0.013$ & $3.133\pm0.201$ \\
+BRegressor (ours) & $\boldsymbol{0.430\pm0.014}$ & $\boldsymbol{0.656\pm0.011}$ & $\boldsymbol{0.046\pm0.001}$ \\
+Linear SGD (JAX) & $0.825\pm0.024$ & $0.908\pm0.013$ & $5.021\pm0.063$ \\
+MLP SGD (JAX) & $0.907\pm0.018$ & $0.952\pm0.009$ & $6.217\pm0.055$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -399,10 +427,30 @@ regression default, with three classes and per-class gates, weights, and
 intercepts.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/default\_multiclass.json} and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
-the same structural hyperparameters as \texttt{BRegressor}; linear and MLP
-classifier baselines mirror their regression counterparts with softmax
-cross-entropy.  Reported comparisons use prequential accuracy over the same
-seed set after optional warm-up exclusion.
+learning rate $\eta=1.2\times10^{-1}$, $\ell_2$ decay $5\times10^{-4}$,
+feature batch size $B=12$, thirty single-sample SGD steps, and the same
+structural limits as \texttt{BRegressor}; linear and MLP classifier baselines
+mirror their regression counterparts with softmax cross-entropy.  Reported
+comparisons use prequential accuracy over the same seed set after optional
+warm-up exclusion.
+
+Tables report the mean $\pm$ standard error over five seeds.  Accuracy is the
+fraction of correct pre-update class predictions on the 900 post-warm-up
+observations.  Total time is the prequential predict-plus-update time for a
+1,000-sample trajectory.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrr}
+\hline
+\textbf{Model} & accuracy & total s \\
+\hline
+BClassifier (ours) & $\boldsymbol{0.746\pm0.023}$ & $\boldsymbol{0.088\pm0.001}$ \\
+Linear SGD (JAX) & $0.653\pm0.038$ & $0.796\pm0.034$ \\
+MLP SGD (JAX) & $0.645\pm0.041$ & $1.153\pm0.029$ \\
+\hline
+\end{tabular}
+\end{center}
 
 \section{Limitations and scope}
 This document specifies the ensemble models used by Binaml.  It does not

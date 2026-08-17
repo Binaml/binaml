@@ -8,7 +8,7 @@ from binaml._core import BClassifierCore
 
 from .base import PredictUpdateState, validate_binary_features, validate_class_index
 
-DEFAULT_LEARNING_RATE = 0.016
+DEFAULT_LEARNING_RATE = 0.12
 
 
 class BClassifier(PredictUpdateState):
@@ -19,9 +19,9 @@ class BClassifier(PredictUpdateState):
         n_features: int,
         n_classes: int,
         learning_rate: float = DEFAULT_LEARNING_RATE,
-        l2: float = 0.0,
-        batch_size: int = 6,
-        sgd_steps: int = 11,
+        l2: float = 5e-4,
+        batch_size: int = 12,
+        sgd_steps: int = 30,
         parent_top_k: int = 8,
         max_layers: int = 4,
         max_functions: int = 96,

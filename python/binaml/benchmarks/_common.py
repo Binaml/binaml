@@ -25,15 +25,9 @@ def aggregate(values: list[float]) -> dict[str, float]:
 
 
 def warmup_samples(scenario: dict[str, object]) -> int:
-    warmup = scenario.get("warmup_samples", 0)
-    if not isinstance(warmup, int) or isinstance(warmup, bool):
-        raise TypeError("warmup_samples must be an integer")
-    n_samples = scenario["n_samples"]
-    if not isinstance(n_samples, int) or isinstance(n_samples, bool):
-        raise TypeError("n_samples must be an integer")
-    if not 0 <= warmup < n_samples:
-        raise ValueError("warmup_samples must be non-negative and less than n_samples")
-    return warmup
+    from binaml.benchmarks.scenario import warmup_samples as _warmup_samples
+
+    return _warmup_samples(scenario)
 
 
 def load_factory(specification: str):

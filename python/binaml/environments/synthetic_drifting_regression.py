@@ -7,11 +7,20 @@ import json
 import math
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from itertools import combinations
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
+
+from .boolean_dgp import (
+    BinaryFunctionSpec,
+    BooleanDgpConfig,
+    ConditionalDag,
+    cpt_probability,
+    sample_ancestrally,
+    sample_binary_function,
+    sample_conditional_dag,
+)
 
 GENERATOR_VERSION = "2.0.0-numpy-pcg64dxsm"
 
@@ -106,95 +115,6 @@ class SyntheticStreamConfig:
 
 
 @dataclass(frozen=True)
-class BinaryFunctionSpec:
-    feature_indices: tuple[int, ...]
-    family: Literal["truth_table", "hamming_threshold"]
-    truth_table: tuple[int, ...] | None = None
-    activation_probability: float | None = None
-    threshold: int | None = None
-
-    def __post_init__(self) -> None:
-        if not self.feature_indices or len(set(self.feature_indices)) != len(self.feature_indices):
-            raise ValueError("feature_indices must be non-empty and distinct")
-        if self.family == "truth_table":
-            if self.truth_table is None or len(self.truth_table) != 2 ** len(self.feature_indices):
-                raise ValueError("invalid truth-table function")
-            if any(value not in (0, 1) for value in self.truth_table):
-                raise ValueError("truth_table values must be binary")
-            if self.activation_probability is None or not 0 <= self.activation_probability <= 1:
-                raise ValueError("invalid activation probability")
-        elif self.family == "hamming_threshold":
-            if self.threshold is None or not 1 <= self.threshold <= len(self.feature_indices):
-                raise ValueError("invalid Hamming threshold")
-        else:
-            raise ValueError("unknown function family")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "feature_indices": list(self.feature_indices),
-            "family": self.family,
-            "truth_table": list(self.truth_table) if self.truth_table is not None else None,
-            "activation_probability": self.activation_probability,
-            "threshold": self.threshold,
-        }
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> BinaryFunctionSpec:
-        table = value.get("truth_table")
-        return cls(
-            tuple(value["feature_indices"]),
-            value["family"],
-            tuple(table) if table is not None else None,
-            value.get("activation_probability"),
-            value.get("threshold"),
-        )
-
-    def evaluate(self, x: np.ndarray) -> int:
-        if self.family == "hamming_threshold":
-            return int(sum(int(x[feature]) for feature in self.feature_indices) >= self.threshold)  # type: ignore[operator]
-        index = 0
-        for feature in self.feature_indices:
-            index = (index << 1) | int(x[feature])
-        return self.truth_table[index]  # type: ignore[index]
-
-
-@dataclass(frozen=True)
-class ConditionalDag:
-    order: tuple[int, ...]
-    parents: tuple[tuple[int, ...], ...]
-    cpts: tuple[tuple[float, ...], ...]
-    node_sampling_probability: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "order": list(self.order),
-            "parents": [list(parent_list) for parent_list in self.parents],
-            "cpts": [list(cpt) for cpt in self.cpts],
-            "node_sampling_probability": self.node_sampling_probability,
-        }
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any], width: int) -> ConditionalDag:
-        order = tuple(int(node) for node in value["order"])
-        parents = tuple(tuple(int(parent) for parent in parent_list) for parent_list in value["parents"])
-        cpts = tuple(tuple(float(probability) for probability in cpt) for cpt in value["cpts"])
-        probability = float(value["node_sampling_probability"])
-        if sorted(order) != list(range(width)) or len(parents) != width or len(cpts) != width:
-            raise ValueError("invalid DAG shape")
-        positions = {node: position for position, node in enumerate(order)}
-        if not 0 <= probability <= 1:
-            raise ValueError("invalid node sampling probability")
-        for node, parent_list, cpt in zip(range(width), parents, cpts, strict=True):
-            if len(set(parent_list)) != len(parent_list) or any(parent not in positions for parent in parent_list):
-                raise ValueError("invalid DAG parents")
-            if any(positions[parent] >= positions[node] for parent in parent_list):
-                raise ValueError("DAG parent must precede its child")
-            if len(cpt) != 2 ** len(parent_list) or any(not 0 <= entry <= 1 for entry in cpt):
-                raise ValueError("invalid CPT")
-        return cls(order, parents, cpts, probability)
-
-
-@dataclass(frozen=True)
 class Trajectory:
     X: np.ndarray
     y: np.ndarray
@@ -252,13 +172,14 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
         self._gate_sampling_rng, self._intercept_rng, self._noise_rng = (
             np.random.Generator(np.random.PCG64DXSM(stream)) for stream in streams[6:]
         )
-        self.functions = [self._sample_function() for _ in range(config.n_functions)]
+        dgp_config = BooleanDgpConfig.from_regression_config(config)
+        self.functions = [sample_binary_function(self._target_rng, dgp_config) for _ in range(config.n_functions)]
         self.weights = self._target_rng.uniform(config.w_min, config.w_max, config.n_functions)
         self.intercept = float(self._target_rng.uniform(config.b_min, config.b_max))
         self.input_dag = self._sample_dag(config.n_features, config.p_sample_min_x, config.p_sample_max_x, self._input_distribution_rng)
         self.gate_dag = self._sample_dag(config.n_functions, config.p_sample_min_g, config.p_sample_max_g, self._gate_distribution_rng)
-        self.input_state = self._sample_ancestrally(self.input_dag, self._input_distribution_rng)
-        self.gate_state = self._sample_ancestrally(self.gate_dag, self._gate_distribution_rng)
+        self.input_state = sample_ancestrally(self.input_dag, self._input_distribution_rng)
+        self.gate_state = sample_ancestrally(self.gate_dag, self._gate_distribution_rng)
 
     def __iter__(self) -> SyntheticDriftingRegressionStream:
         return self
@@ -266,48 +187,23 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
     def __next__(self) -> tuple[np.ndarray, float]:
         return self.next_sample()
 
-    def _sample_function(self) -> BinaryFunctionSpec:
-        if self._target_rng.random() < self.config.truth_table_function_probability:
-            arity = int(self._target_rng.integers(1, self.config.max_truth_table_function_arity + 1))
-            indices = tuple(int(index) for index in self._target_rng.choice(self.config.n_features, arity, replace=False))
-            activation = float(self._target_rng.uniform(self.config.p_activation_min, self.config.p_activation_max))
-            table = tuple(int(value) for value in self._target_rng.binomial(1, activation, 2**arity))
-            return BinaryFunctionSpec(indices, "truth_table", table, activation)
-        arity = int(self._target_rng.integers(self.config.min_hamming_threshold_function_arity, self.config.max_hamming_threshold_function_arity + 1))
-        indices = tuple(int(index) for index in self._target_rng.choice(self.config.n_features, arity, replace=False))
-        return BinaryFunctionSpec(indices, "hamming_threshold", threshold=int(self._target_rng.integers(1, arity + 1)))
-
     def _sample_dag(self, width: int, p_sample_min: float, p_sample_max: float, rng: np.random.Generator) -> ConditionalDag:
-        order = tuple(int(node) for node in rng.permutation(width))
-        parents: list[tuple[int, ...]] = [()] * width
-        cpts: list[tuple[float, ...]] = [()] * width
-        for position, node in enumerate(order):
-            earlier = order[:position]
-            subsets = [subset for size in range(min(self.config.q_max, position) + 1) for subset in combinations(earlier, size)]
-            parent_list = subsets[int(rng.integers(len(subsets)))]
-            parents[node] = parent_list
-            cpts[node] = tuple(float(value) for value in rng.uniform(self.config.p_min, self.config.p_max, 2 ** len(parent_list)))
-        return ConditionalDag(order, tuple(parents), tuple(cpts), float(rng.uniform(p_sample_min, p_sample_max)))
-
-    @staticmethod
-    def _cpt_probability(dag: ConditionalDag, state: np.ndarray, node: int) -> float:
-        index = 0
-        for parent in dag.parents[node]:
-            index = (index << 1) | int(state[parent])
-        return dag.cpts[node][index]
-
-    def _sample_ancestrally(self, dag: ConditionalDag, rng: np.random.Generator) -> np.ndarray:
-        state = np.zeros(len(dag.order), dtype=np.uint8)
-        for node in dag.order:
-            state[node] = int(rng.random() < self._cpt_probability(dag, state, node))
-        return state
+        return sample_conditional_dag(
+            rng,
+            width=width,
+            q_max=self.config.q_max,
+            p_min=self.config.p_min,
+            p_max=self.config.p_max,
+            p_sample_min=p_sample_min,
+            p_sample_max=p_sample_max,
+        )
 
     def _partial_ancestral_sample(self, state: np.ndarray, dag: ConditionalDag, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
         mask = rng.binomial(1, dag.node_sampling_probability, len(state)).astype(bool)
         next_state = state.copy()
         for node in dag.order:
             if mask[node]:
-                next_state[node] = int(rng.random() < self._cpt_probability(dag, next_state, node))
+                next_state[node] = int(rng.random() < cpt_probability(dag, next_state, node))
         return next_state, mask
 
     def next_sample(self, return_metadata: bool = False) -> tuple[np.ndarray, float] | tuple[np.ndarray, float, dict[str, Any]]:

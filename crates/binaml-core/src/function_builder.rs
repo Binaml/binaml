@@ -1,3 +1,4 @@
+use crate::association::association_score;
 use crate::{
     boolean_circuit::evaluate_truth_table, FeatureCounter, FeatureCounterError, SignBatch,
 };
@@ -46,13 +47,20 @@ pub struct EphemeralGraph {
     pub(crate) layers: Vec<Vec<BuildNodeId>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FunctionModel {
+    pub(crate) graph: EphemeralGraph,
+    pub(crate) output: BuildNodeId,
+    pub(crate) invert_output: bool,
+}
+
 pub struct FunctionBuilder;
 
 impl FunctionBuilder {
     pub fn build(
         batch: SignBatch<'_>,
         config: FunctionBuildConfig,
-    ) -> Result<(EphemeralGraph, BuildNodeId), FunctionBuildError> {
+    ) -> Result<FunctionModel, FunctionBuildError> {
         if config.batch_size == 0
             || config.parent_top_k == 0
             || config.max_layers == 0
@@ -67,22 +75,29 @@ impl FunctionBuilder {
             nodes: Vec::new(),
             layers: vec![Vec::new()],
         };
+        let mut association_scores: HashMap<usize, i64> = HashMap::new();
+        let mut accuracy_scores: HashMap<usize, u8> = HashMap::new();
 
         for input_index in 0..source_count {
             let id = BuildNodeId(graph.nodes.len());
             graph.nodes.push(EphemeralNode::Source { input_index });
             graph.layers[0].push(id);
-        }
-
-        let mut scores = HashMap::new();
-        for &id in &graph.layers[0] {
-            let column = node_column(&graph, batch, id, &mut HashMap::new())?;
-            scores.insert(id.0, correct_count(&column, batch.signs));
+            register_node_scores(
+                &graph,
+                batch,
+                id,
+                &mut association_scores,
+                &mut accuracy_scores,
+            )?;
         }
 
         for _ in 0..config.max_layers {
             let parent_layer = graph.layers.len() - 1;
-            let parents = parent_top_k(&graph.layers[parent_layer], &scores, config.parent_top_k);
+            let parents = parent_top_k(
+                &graph.layers[parent_layer],
+                &association_scores,
+                config.parent_top_k,
+            );
             if parents.len() < 2 {
                 break;
             }
@@ -106,26 +121,70 @@ impl FunctionBuilder {
                         truth_table,
                     });
                     graph.layers[new_layer].push(id);
-                    let column = node_column(&graph, batch, id, &mut HashMap::new())?;
-                    scores.insert(id.0, correct_count(&column, batch.signs));
+                    register_node_scores(
+                        &graph,
+                        batch,
+                        id,
+                        &mut association_scores,
+                        &mut accuracy_scores,
+                    )?;
                 }
             }
         }
 
-        let output = select_output(&graph, &scores);
-        Ok((graph, output))
+        let (output, invert_output) = select_output(&graph, &accuracy_scores, batch);
+
+        Ok(FunctionModel {
+            graph,
+            output,
+            invert_output,
+        })
+    }
+
+    pub fn predict(
+        model: &FunctionModel,
+        batch: SignBatch<'_>,
+    ) -> Result<Vec<bool>, FunctionBuildError> {
+        validate_feature_batch(batch)?;
+        let mut predictions = node_column(&model.graph, batch, model.output, &mut HashMap::new())?;
+        if model.invert_output {
+            for value in &mut predictions {
+                *value = !*value;
+            }
+        }
+        Ok(predictions)
+    }
+
+    pub fn fit(
+        batch: SignBatch<'_>,
+        config: FunctionBuildConfig,
+    ) -> Result<(FunctionModel, u8), FunctionBuildError> {
+        let model = Self::build(batch, config)?;
+        let predictions = Self::predict(&model, batch)?;
+        let score = correct_count(&predictions, batch.signs);
+        Ok((model, score))
+    }
+
+    pub fn fit_predict(
+        batch: SignBatch<'_>,
+        config: FunctionBuildConfig,
+    ) -> Result<(Vec<bool>, u8), FunctionBuildError> {
+        let (model, score) = Self::fit(batch, config)?;
+        let predictions = Self::predict(&model, batch)?;
+        Ok((predictions, score))
     }
 }
 
-fn validate_batch(batch: SignBatch<'_>, batch_size: usize) -> Result<(), FunctionBuildError> {
-    if batch.signs.len() != batch_size
-        || batch
-            .feature_columns
-            .iter()
-            .any(|column| column.len() != batch_size)
-    {
-        return Err(FunctionBuildError::InvalidBatch);
-    }
+fn register_node_scores(
+    graph: &EphemeralGraph,
+    batch: SignBatch<'_>,
+    id: BuildNodeId,
+    association_scores: &mut HashMap<usize, i64>,
+    accuracy_scores: &mut HashMap<usize, u8>,
+) -> Result<(), FunctionBuildError> {
+    let column = node_column(graph, batch, id, &mut HashMap::new())?;
+    association_scores.insert(id.0, association_score(&column, batch.signs).abs());
+    accuracy_scores.insert(id.0, correct_count(&column, batch.signs));
     Ok(())
 }
 
@@ -145,16 +204,16 @@ fn learn_truth_table(
 
 fn parent_top_k(
     references: &[BuildNodeId],
-    scores: &HashMap<usize, u8>,
+    association_scores: &HashMap<usize, i64>,
     k: usize,
 ) -> Vec<BuildNodeId> {
     let mut parents: Vec<_> = references.to_vec();
     parents.sort_by(|left, right| {
-        scores
+        association_scores
             .get(&right.0)
             .copied()
             .unwrap_or(0)
-            .cmp(&scores.get(&left.0).copied().unwrap_or(0))
+            .cmp(&association_scores.get(&left.0).copied().unwrap_or(0))
             .then_with(|| left.0.cmp(&right.0))
     });
     parents.truncate(k);
@@ -170,6 +229,37 @@ fn correct_count(values: &[bool], signs: &[bool]) -> u8 {
             .count(),
     )
     .expect("batch size fits in u8")
+}
+
+fn validate_batch(batch: SignBatch<'_>, batch_size: usize) -> Result<(), FunctionBuildError> {
+    validate_feature_batch_with_size(batch, batch_size)?;
+    if batch.signs.len() != batch_size {
+        return Err(FunctionBuildError::InvalidBatch);
+    }
+    Ok(())
+}
+
+fn validate_feature_batch(batch: SignBatch<'_>) -> Result<(), FunctionBuildError> {
+    let batch_size = batch
+        .feature_columns
+        .first()
+        .map(|column| column.len())
+        .unwrap_or(0);
+    validate_feature_batch_with_size(batch, batch_size)
+}
+
+fn validate_feature_batch_with_size(
+    batch: SignBatch<'_>,
+    batch_size: usize,
+) -> Result<(), FunctionBuildError> {
+    if batch
+        .feature_columns
+        .iter()
+        .any(|column| column.len() != batch_size)
+    {
+        return Err(FunctionBuildError::InvalidBatch);
+    }
+    Ok(())
 }
 
 fn node_column(
@@ -214,19 +304,27 @@ fn node_layer(graph: &EphemeralGraph, id: BuildNodeId) -> usize {
     0
 }
 
-fn select_output(graph: &EphemeralGraph, scores: &HashMap<usize, u8>) -> BuildNodeId {
-    (0..graph.nodes.len())
+fn select_output(
+    graph: &EphemeralGraph,
+    accuracy_scores: &HashMap<usize, u8>,
+    batch: SignBatch<'_>,
+) -> (BuildNodeId, bool) {
+    let batch_size = batch.signs.len();
+    let output = (0..graph.nodes.len())
         .map(BuildNodeId)
         .max_by(|left, right| {
-            scores
+            accuracy_scores
                 .get(&left.0)
                 .copied()
                 .unwrap_or(0)
-                .cmp(&scores.get(&right.0).copied().unwrap_or(0))
+                .cmp(&accuracy_scores.get(&right.0).copied().unwrap_or(0))
                 .then_with(|| node_layer(graph, *left).cmp(&node_layer(graph, *right)))
                 .then_with(|| right.0.cmp(&left.0))
         })
-        .expect("graph always has source nodes")
+        .expect("graph always has source nodes");
+    let matches = accuracy_scores[&output.0];
+    let invert_output = matches < batch_size as u8 - matches;
+    (output, invert_output)
 }
 
 #[cfg(test)]
@@ -244,7 +342,7 @@ mod tests {
             parent_top_k: 2,
             max_layers: 1,
         };
-        let (graph, output) = FunctionBuilder::build(
+        let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
                 signs: &signs,
@@ -252,9 +350,10 @@ mod tests {
             config,
         )
         .unwrap();
-        assert_eq!(graph.layers[1].len(), 1);
+        assert_eq!(model.graph.layers[1].len(), 1);
+        assert!(!model.invert_output);
         assert!(matches!(
-            graph.nodes[output.0],
+            model.graph.nodes[model.output.0],
             super::EphemeralNode::Composed { .. }
         ));
     }
@@ -271,7 +370,7 @@ mod tests {
             parent_top_k: 3,
             max_layers: 1,
         };
-        let (graph, _) = FunctionBuilder::build(
+        let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
                 signs: &signs,
@@ -279,6 +378,85 @@ mod tests {
             config,
         )
         .unwrap();
-        assert_eq!(graph.layers[1].len(), 3);
+        assert_eq!(model.graph.layers[1].len(), 3);
+    }
+
+    #[test]
+    fn learns_negated_literal_target() {
+        let feature = [false, true, false, true, false, true, false, true];
+        let columns = [&feature[..]];
+        let signs = [true, false, true, false, true, false, true, false];
+        let config = FunctionBuildConfig {
+            batch_size: 8,
+            parent_top_k: 2,
+            max_layers: 1,
+        };
+        let (predictions, score) = FunctionBuilder::fit_predict(
+            SignBatch {
+                feature_columns: &columns,
+                signs: &signs,
+            },
+            config,
+        )
+        .unwrap();
+        assert_eq!(predictions, signs);
+        assert_eq!(score, 8);
+    }
+
+    #[test]
+    fn learns_xor_with_truth_table_composition() {
+        let first = [false, false, true, true];
+        let second = [false, true, false, true];
+        let columns = [&first[..], &second[..]];
+        let signs = [false, true, true, false];
+        let config = FunctionBuildConfig {
+            batch_size: 4,
+            parent_top_k: 2,
+            max_layers: 1,
+        };
+        let (predictions, score) = FunctionBuilder::fit_predict(
+            SignBatch {
+                feature_columns: &columns,
+                signs: &signs,
+            },
+            config,
+        )
+        .unwrap();
+        assert_eq!(predictions, signs);
+        assert_eq!(score, 4);
+    }
+
+    #[test]
+    fn predicts_on_a_holdout_batch() {
+        let first = [false, true, false, true];
+        let second = [false, false, true, true];
+        let columns = [&first[..], &second[..]];
+        let signs = [false, true, true, true];
+        let config = FunctionBuildConfig {
+            batch_size: 4,
+            parent_top_k: 2,
+            max_layers: 1,
+        };
+        let model = FunctionBuilder::build(
+            SignBatch {
+                feature_columns: &columns,
+                signs: &signs,
+            },
+            config,
+        )
+        .unwrap();
+        let holdout_first = [false, true];
+        let holdout_second = [true, true];
+        let holdout_columns = [&holdout_first[..], &holdout_second[..]];
+        let holdout_signs = [true, true];
+        let predictions = FunctionBuilder::predict(
+            &model,
+            SignBatch {
+                feature_columns: &holdout_columns,
+                signs: &holdout_signs,
+            },
+        )
+        .unwrap();
+        assert_eq!(predictions, [true, true]);
     }
 }

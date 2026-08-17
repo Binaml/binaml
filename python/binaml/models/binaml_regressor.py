@@ -8,7 +8,7 @@ from binaml._core import BRegressorCore
 
 from .base import PredictUpdateState, validate_binary_features, validate_finite_float_target
 
-DEFAULT_LEARNING_RATE = 5e-3
+DEFAULT_LEARNING_RATE = 0.03
 
 
 class BRegressor(PredictUpdateState):
@@ -18,9 +18,9 @@ class BRegressor(PredictUpdateState):
         self,
         n_features: int,
         learning_rate: float = DEFAULT_LEARNING_RATE,
-        l2: float = 1e-4,
+        l2: float = 5e-4,
         batch_size: int = 16,
-        sgd_steps: int = 5,
+        sgd_steps: int = 20,
         parent_top_k: int = 8,
         max_layers: int = 3,
         max_functions: int = 64,

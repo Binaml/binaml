@@ -7,18 +7,21 @@ import json
 import math
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .synthetic_drifting_regression import (
+from .boolean_dgp import (
     BinaryFunctionSpec,
+    BooleanDgpConfig,
     ConditionalDag,
-    _canonical_json,
-    _jsonify,
+    cpt_probability,
+    sample_ancestrally,
+    sample_binary_function,
+    sample_conditional_dag,
 )
+from .synthetic_drifting_regression import _canonical_json, _jsonify
 
 GENERATOR_VERSION = "3.0.0-numpy-pcg64dxsm"
 
@@ -167,7 +170,8 @@ class SyntheticDriftingClassificationStream(Iterator[tuple[np.ndarray, int]]):
             self._gate_drift_rngs.append(generators[base + 1])
             self._gate_sampling_rngs.append(generators[base + 2])
             self._intercept_rngs.append(generators[base + 3])
-        self.functions = [self._sample_function() for _ in range(config.n_functions)]
+        dgp_config = BooleanDgpConfig.from_classification_config(config)
+        self.functions = [sample_binary_function(self._target_rng, dgp_config) for _ in range(config.n_functions)]
         self.weights = self._target_rng.uniform(
             config.w_min,
             config.w_max,
@@ -188,9 +192,9 @@ class SyntheticDriftingClassificationStream(Iterator[tuple[np.ndarray, int]]):
             )
             for class_index in range(config.n_classes)
         ]
-        self.input_state = self._sample_ancestrally(self.input_dag, self._input_distribution_rng)
+        self.input_state = sample_ancestrally(self.input_dag, self._input_distribution_rng)
         self.gate_states = [
-            self._sample_ancestrally(self.gate_dags[class_index], self._gate_distribution_rngs[class_index])
+            sample_ancestrally(self.gate_dags[class_index], self._gate_distribution_rngs[class_index])
             for class_index in range(config.n_classes)
         ]
         self.intercepts = [
@@ -204,53 +208,23 @@ class SyntheticDriftingClassificationStream(Iterator[tuple[np.ndarray, int]]):
     def __next__(self) -> tuple[np.ndarray, int]:
         return self.next_sample()
 
-    def _sample_function(self) -> BinaryFunctionSpec:
-        if self._target_rng.random() < self.config.truth_table_function_probability:
-            arity = int(self._target_rng.integers(1, self.config.max_truth_table_function_arity + 1))
-            indices = tuple(int(index) for index in self._target_rng.choice(self.config.n_features, arity, replace=False))
-            activation = float(self._target_rng.uniform(self.config.p_activation_min, self.config.p_activation_max))
-            table = tuple(int(value) for value in self._target_rng.binomial(1, activation, 2**arity))
-            return BinaryFunctionSpec(indices, "truth_table", table, activation)
-        arity = int(
-            self._target_rng.integers(
-                self.config.min_hamming_threshold_function_arity,
-                self.config.max_hamming_threshold_function_arity + 1,
-            )
-        )
-        indices = tuple(int(index) for index in self._target_rng.choice(self.config.n_features, arity, replace=False))
-        return BinaryFunctionSpec(indices, "hamming_threshold", threshold=int(self._target_rng.integers(1, arity + 1)))
-
     def _sample_dag(self, width: int, p_sample_min: float, p_sample_max: float, rng: np.random.Generator) -> ConditionalDag:
-        order = tuple(int(node) for node in rng.permutation(width))
-        parents: list[tuple[int, ...]] = [()] * width
-        cpts: list[tuple[float, ...]] = [()] * width
-        for position, node in enumerate(order):
-            earlier = order[:position]
-            subsets = [subset for size in range(min(self.config.q_max, position) + 1) for subset in combinations(earlier, size)]
-            parent_list = subsets[int(rng.integers(len(subsets)))]
-            parents[node] = parent_list
-            cpts[node] = tuple(float(value) for value in rng.uniform(self.config.p_min, self.config.p_max, 2 ** len(parent_list)))
-        return ConditionalDag(order, tuple(parents), tuple(cpts), float(rng.uniform(p_sample_min, p_sample_max)))
-
-    @staticmethod
-    def _cpt_probability(dag: ConditionalDag, state: np.ndarray, node: int) -> float:
-        index = 0
-        for parent in dag.parents[node]:
-            index = (index << 1) | int(state[parent])
-        return dag.cpts[node][index]
-
-    def _sample_ancestrally(self, dag: ConditionalDag, rng: np.random.Generator) -> np.ndarray:
-        state = np.zeros(len(dag.order), dtype=np.uint8)
-        for node in dag.order:
-            state[node] = int(rng.random() < self._cpt_probability(dag, state, node))
-        return state
+        return sample_conditional_dag(
+            rng,
+            width=width,
+            q_max=self.config.q_max,
+            p_min=self.config.p_min,
+            p_max=self.config.p_max,
+            p_sample_min=p_sample_min,
+            p_sample_max=p_sample_max,
+        )
 
     def _partial_ancestral_sample(self, state: np.ndarray, dag: ConditionalDag, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
         mask = rng.binomial(1, dag.node_sampling_probability, len(state)).astype(bool)
         next_state = state.copy()
         for node in dag.order:
             if mask[node]:
-                next_state[node] = int(rng.random() < self._cpt_probability(dag, next_state, node))
+                next_state[node] = int(rng.random() < cpt_probability(dag, next_state, node))
         return next_state, mask
 
     def _class_score(

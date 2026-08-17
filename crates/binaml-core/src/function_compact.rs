@@ -238,7 +238,7 @@ mod tests {
             parent_top_k: 2,
             max_layers: 1,
         };
-        let (graph, output) = FunctionBuilder::build(
+        let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
                 signs: &signs,
@@ -246,7 +246,7 @@ mod tests {
             config,
         )
         .unwrap();
-        let compacted = compact(graph, output).unwrap();
+        let compacted = compact(model.graph, model.output).unwrap();
         assert!(compacted.source_count() <= 2);
     }
 
@@ -279,7 +279,7 @@ mod tests {
             parent_top_k: 3,
             max_layers: 2,
         };
-        let (graph, output) = FunctionBuilder::build(
+        let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
                 signs: &signs,
@@ -287,7 +287,7 @@ mod tests {
             config,
         )
         .unwrap();
-        let compacted = compact(graph, output).unwrap();
+        let compacted = compact(model.graph, model.output).unwrap();
         for (index, node) in compacted.nodes.iter().enumerate() {
             if let crate::function_graph::CompactNode::Composed { first, second, .. } = node {
                 assert!(first < &index);

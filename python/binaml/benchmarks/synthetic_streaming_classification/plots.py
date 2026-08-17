@@ -123,3 +123,54 @@ def write_aggregate_scatter(path: Path, metrics: dict[str, dict[str, object]]) -
     axis.legend(handles=legend_handles, title="Metrics", loc="center left", bbox_to_anchor=(1.02, 0.5))
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
+
+
+def write_job_plots(
+    output_dir: Path,
+    source_argument: str,
+    source_path: Path,
+    completed: list[dict[str, object]],
+    metrics: dict[str, dict[str, object]],
+) -> None:
+    from binaml.benchmarks.scenario import load_scenario, warmup_samples
+    from binaml.environments import (
+        SyntheticClassificationStreamConfig,
+        generate_classification_trajectory,
+    )
+    from binaml.evaluation import EvaluationTiming, PrequentialClassificationResult
+
+    records_by_seed: dict[int, dict[str, dict[str, object]]] = {}
+    for job in completed:
+        records_by_seed.setdefault(int(job["seed"]), {})[str(job["model"])] = job["result"]  # type: ignore[index]
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir()
+    scenario = load_scenario(source_path) if source_argument == "--scenario" else None
+    warmup = warmup_samples(scenario) if scenario is not None else 0
+    for seed, records in records_by_seed.items():
+        trajectory = (
+            generate_classification_trajectory(
+                SyntheticClassificationStreamConfig.from_dict(scenario["environment"]),
+                int(scenario["n_samples"]),
+                seed,
+                return_metadata=True,
+            )
+            if scenario is not None
+            else ClassificationTrajectory.load_npz(source_path)
+        )
+        evaluations = {
+            name: PrequentialClassificationResult(
+                np.asarray(record["predictions"], dtype=np.int64),
+                trajectory.y,
+                np.asarray(record["correct"], dtype=bool),
+                EvaluationTiming(**record["timing_seconds"]),  # type: ignore[arg-type]
+            )
+            for name, record in records.items()
+        }
+        write_accuracy_plot(plots_dir / f"accuracy_seed_{seed}.png", trajectory, evaluations, warmup)
+        for (model_name, evaluation), color in zip(
+            evaluations.items(), sns.color_palette("colorblind", n_colors=len(evaluations)), strict=True
+        ):
+            model_dir = plots_dir / model_name.replace("/", "_")
+            model_dir.mkdir(exist_ok=True)
+            write_model_plot(model_dir / f"seed_{seed}.png", trajectory, model_name, evaluation, color, warmup)
+    write_aggregate_scatter(plots_dir / "model_comparison.png", metrics)

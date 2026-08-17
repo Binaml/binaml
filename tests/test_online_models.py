@@ -128,6 +128,23 @@ def test_feature_regressor_repeats_replay_batch_updates() -> None:
     assert model.intercept == pytest.approx(0.19)
 
 
+def test_b_regressor_learns_negated_literal_via_output_inversion() -> None:
+    model = BRegressor(
+        1,
+        batch_size=8,
+        parent_top_k=2,
+        max_layers=1,
+        max_functions=4,
+        sgd_steps=1,
+    )
+    features = np.array([[0], [1], [0], [1], [0], [1], [0], [1]], dtype=np.uint8)
+    targets = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]
+    for row, target in zip(features, targets):
+        model.predict(row)
+        model.update(target)
+    assert model.function_count == 1
+
+
 def test_mlp_replays_the_latest_batch_for_each_sgd_step() -> None:
     model = MLPRegressor(1, batch_size=2, sgd_steps=2, random_state=0)
 

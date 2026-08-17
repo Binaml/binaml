@@ -4,6 +4,15 @@ All notable changes to Binaml are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** boolean function discovery unified in `FunctionBuilder`: `d` source
+  features, `|assoc|` parent ranking, truth-table composition, and accuracy-based
+  output selection with optional output inversion. Removed match-count,
+  association-only, and hybrid-named builders from Rust bindings and benchmarks.
+- **Breaking:** linear heads now use uncentered function activations $f_k(x)\in\{0,1\}$
+  instead of $2f_k(x)-1$. Default \texttt{BRegressor} and \texttt{BClassifier}
+  hyperparameters updated accordingly.
+
 ## [0.1.0-alpha.3] - 2026-08-16
 
 ### Added
