@@ -48,7 +48,7 @@ impl BRegressor {
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
-        max_layers: usize,
+        max_layers_without_improvement: usize,
         max_functions: usize,
     ) -> Result<Self, BRegressorError> {
         Self::new(
@@ -58,7 +58,7 @@ impl BRegressor {
                 l2,
                 sgd_steps,
                 batch_size,
-                max_layers,
+                max_layers_without_improvement,
                 parent_top_k,
                 max_functions,
             },

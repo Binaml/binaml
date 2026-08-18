@@ -118,9 +118,9 @@ synthetic regression and classification streams.
   $\{0,1\}$, stored as a compact boolean function.
   \item[$T\in\{0,\ldots,15\}$] Four-bit truth table of an arity-2 composed
   node.
-  \item[$B,S,n,K,L_{\max},K_{\max}$] Feature batch size, SGD steps per
-  observation, batch index, parent top-$K$ width, maximum builder depth, and
-  ensemble capacity.
+  \item[$B,S,n,K,L_{\mathrm{pat}},K_{\max}$] Feature batch size, SGD steps per
+  observation, batch index, parent top-$K$ width, consecutive layers without
+  accuracy improvement before growth stops, and ensemble capacity.
 \end{description}
 
 \section{Model}
@@ -218,7 +218,9 @@ a four-bit truth table $T\in\{0,\ldots,15\}$.
 Each feature batch grows an ephemeral wide DAG: layer zero holds the $d$ source
 bits; at each subsequent layer the builder forms every distinct pair among the
 top-$K$ parent nodes by descending $|\text{assoc}|$, learns a truth table on the
-current batch, and appends the resulting node.  Depth never exceeds $L_{\max}$.
+current batch, and appends the resulting node.  Growth stops after $L_{\mathrm{pat}}$
+consecutive composed layers fail to improve the best in-sample accuracy, when
+fewer than two parents remain, or once accuracy is perfect on $\mathcal B_n$.
 When the batch fills, the builder selects one output node by descending
 in-sample accuracy, then depth, then node id, inverting the output bit when the
 inverted node is more accurate on $\mathcal B_n$.  The subgraph is compacted
@@ -242,7 +244,7 @@ $B\leq255$.
 \hline
 \textbf{Type} & \textbf{Fields or representation} & \textbf{Role} \\
 \hline
-\texttt{FunctionBuildConfig} & \texttt{\{batch\_size, parent\_top\_k, max\_layers\}} & batch-local graph growth limits \\
+\texttt{FunctionBuildConfig} & \texttt{\{batch\_size, parent\_top\_k, max\_layers\_without\_improvement\}} & batch-local graph growth limits \\
 \texttt{FunctionBuilder} & stateless builder & grows ephemeral DAG from one \texttt{SignBatch} \\
 \texttt{FunctionGraph} & sources, compact nodes, output index & immutable stored function \\
 \texttt{CompactNode} & \texttt{Source}, \texttt{Constant}, or \texttt{Composed\{first, second, truth\_table\}} & one evaluation step \\
@@ -293,17 +295,28 @@ resolving to zero.  As one counter may receive every observation, the
 \texttt{u8} counters bound the admissible batch size to $B\leq255$.
 
 \subsection{Batch graph growth}
-For each layer $\ell=1,\ldots,L_{\max}$:
+Starting from layer zero, the builder repeatedly appends composed layers until
+growth stops:
 \begin{enumerate}
-  \item Let $P$ be the top-$K$ nodes in layer $\ell-1$ by $|\text{assoc}|$,
-  breaking ties by node id.
-  \item Form every distinct pair in $P$.
+  \item Let $L_{\mathrm{pat}}$ be the configured patience: the number of
+  consecutive composed layers allowed without improving the best in-sample
+  accuracy seen so far.
+  \item While fewer than $L_{\mathrm{pat}}$ consecutive layers have failed to
+  improve accuracy, fewer than two parent nodes remain in the current layer,
+  and accuracy is not yet perfect on $\mathcal B_n$:
+  \begin{enumerate}
+  \item Let $P_{\ell-1}$ be the top-$K$ nodes in layer $\ell-1$ by
+  $|\text{assoc}|$, breaking ties by node id.
+  \item Form every distinct pair in $P_{\ell-1}$.
   \item For each pair, learn a truth table on $\mathcal B_n$ and append the
   resulting composed node to layer $\ell$.
+  \item If the best in-sample accuracy across all nodes did not increase, count
+  one layer without improvement; otherwise reset that counter to zero.
+  \end{enumerate}
 \end{enumerate}
-If $P$ has fewer than two nodes, layer $\ell$ is skipped.  After all layers, the
-builder selects the output node by descending in-sample accuracy, then depth,
-then id, inverting the output when that improves accuracy on $\mathcal B_n$.
+After growth stops, the builder selects the output node by descending in-sample
+accuracy, then depth, then id, inverting the output when that improves accuracy
+on $\mathcal B_n$.
 
 \subsection{Ensemble pruning}
 When appending a new function would exceed $K_{\max}$, remove the stored index
@@ -331,7 +344,7 @@ cleared.
   \item[\textbf{Linear}] Learning rate $\eta$, decay $\lambda$, and $S$ SGD
   steps per observation.
   \item[\textbf{Batch structure}] Feature batch size $B$, parent top-$K$ width
-  $K$, maximum builder depth $L_{\max}$, and ensemble capacity $K_{\max}$.
+  $K$, layer growth patience $L_{\mathrm{pat}}$, and ensemble capacity $K_{\max}$.
 \end{description}
 
 \noindent\textbf{Initialize:} empty ensemble, $b\leftarrow 0$, and empty
@@ -393,8 +406,8 @@ distributions each resample independently with probability $0.01$.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
 $\eta=3\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$, feature batch size
-$B=16$, twenty single-sample SGD steps, parent top-$K=8$, builder depth
-$L_{\max}=3$, and ensemble capacity $K_{\max}=64$.  Each stored function
+$B=16$, twenty single-sample SGD steps, parent top-$K=8$, layer growth patience
+$L_{\mathrm{pat}}=2$, and ensemble capacity $K_{\max}=64$.  Each stored function
 enters the linear head as $f_k(x)\in\{0,1\}$.  The linear baseline is a
 JAX replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
@@ -413,9 +426,9 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $\boldsymbol{0.430\pm0.014}$ & $\boldsymbol{0.656\pm0.011}$ & $\boldsymbol{0.046\pm0.001}$ \\
-Linear SGD (JAX) & $0.825\pm0.024$ & $0.908\pm0.013$ & $5.021\pm0.063$ \\
-MLP SGD (JAX) & $0.907\pm0.018$ & $0.952\pm0.009$ & $6.217\pm0.055$ \\
+BRegressor (ours) & $\boldsymbol{0.414\pm0.017}$ & $\boldsymbol{0.643\pm0.013}$ & $\boldsymbol{0.050\pm0.001}$ \\
+Linear SGD (JAX) & $0.825\pm0.024$ & $0.908\pm0.013$ & $4.850\pm0.071$ \\
+MLP SGD (JAX) & $0.907\pm0.018$ & $0.952\pm0.009$ & $7.020\pm0.333$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -445,9 +458,9 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $\boldsymbol{0.746\pm0.023}$ & $\boldsymbol{0.088\pm0.001}$ \\
-Linear SGD (JAX) & $0.653\pm0.038$ & $0.796\pm0.034$ \\
-MLP SGD (JAX) & $0.645\pm0.041$ & $1.153\pm0.029$ \\
+BClassifier (ours) & $\boldsymbol{0.753\pm0.023}$ & $\boldsymbol{0.054\pm0.001}$ \\
+Linear SGD (JAX) & $0.653\pm0.038$ & $0.755\pm0.002$ \\
+MLP SGD (JAX) & $0.645\pm0.041$ & $1.432\pm0.141$ \\
 \hline
 \end{tabular}
 \end{center}

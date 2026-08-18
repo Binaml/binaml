@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub struct FunctionBuildConfig {
     pub batch_size: usize,
     pub parent_top_k: usize,
-    pub max_layers: usize,
+    pub max_layers_without_improvement: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,7 @@ impl FunctionBuilder {
     ) -> Result<FunctionModel, FunctionBuildError> {
         if config.batch_size == 0
             || config.parent_top_k == 0
-            || config.max_layers == 0
+            || config.max_layers_without_improvement == 0
             || config.batch_size > FeatureCounter::MAX_BATCH_SIZE
         {
             return Err(FunctionBuildError::InvalidConfig);
@@ -91,7 +91,12 @@ impl FunctionBuilder {
             )?;
         }
 
-        for _ in 0..config.max_layers {
+        let batch_size_u8 = u8::try_from(config.batch_size)
+            .expect("batch size validated to fit in u8");
+        let mut best_accuracy = accuracy_scores.values().copied().max().unwrap_or(0);
+        let mut layers_without_improvement = 0;
+
+        while layers_without_improvement < config.max_layers_without_improvement {
             let parent_layer = graph.layers.len() - 1;
             let parents = parent_top_k(
                 &graph.layers[parent_layer],
@@ -129,6 +134,16 @@ impl FunctionBuilder {
                         &mut accuracy_scores,
                     )?;
                 }
+            }
+            let new_best = accuracy_scores.values().copied().max().unwrap_or(0);
+            if new_best > best_accuracy {
+                best_accuracy = new_best;
+                layers_without_improvement = 0;
+            } else {
+                layers_without_improvement += 1;
+            }
+            if best_accuracy == batch_size_u8 {
+                break;
             }
         }
 
@@ -340,7 +355,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 2,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let model = FunctionBuilder::build(
             SignBatch {
@@ -368,7 +383,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 3,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let model = FunctionBuilder::build(
             SignBatch {
@@ -389,7 +404,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 8,
             parent_top_k: 2,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let (predictions, score) = FunctionBuilder::fit_predict(
             SignBatch {
@@ -412,7 +427,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 2,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let (predictions, score) = FunctionBuilder::fit_predict(
             SignBatch {
@@ -435,7 +450,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 2,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let model = FunctionBuilder::build(
             SignBatch {

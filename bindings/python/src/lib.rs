@@ -98,7 +98,7 @@ fn sign_batch_from_arrays(
 #[pyclass]
 struct FunctionLearner {
     parent_top_k: usize,
-    max_layers: usize,
+    max_layers_without_improvement: usize,
     model: Option<FunctionModel>,
 }
 
@@ -107,7 +107,7 @@ impl FunctionLearner {
         FunctionBuildConfig {
             batch_size,
             parent_top_k: self.parent_top_k,
-            max_layers: self.max_layers,
+            max_layers_without_improvement: self.max_layers_without_improvement,
         }
     }
 }
@@ -115,11 +115,11 @@ impl FunctionLearner {
 #[pymethods]
 impl FunctionLearner {
     #[new]
-    #[pyo3(signature = (parent_top_k=8, max_layers=4))]
-    fn new(parent_top_k: usize, max_layers: usize) -> Self {
+    #[pyo3(signature = (parent_top_k=8, max_layers_without_improvement=2))]
+    fn new(parent_top_k: usize, max_layers_without_improvement: usize) -> Self {
         Self {
             parent_top_k,
-            max_layers,
+            max_layers_without_improvement,
             model: None,
         }
     }
@@ -199,7 +199,7 @@ struct BRegressorCore {
 #[pymethods]
 impl BRegressorCore {
     #[new]
-    #[pyo3(signature = (source_feature_count, learning_rate=DEFAULT_LEARNING_RATE, l2=DEFAULT_L2, batch_size=16, sgd_steps=DEFAULT_SGD_STEPS, parent_top_k=8, max_layers=3, max_functions=64))]
+    #[pyo3(signature = (source_feature_count, learning_rate=DEFAULT_LEARNING_RATE, l2=DEFAULT_L2, batch_size=16, sgd_steps=DEFAULT_SGD_STEPS, parent_top_k=8, max_layers_without_improvement=2, max_functions=64))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
@@ -208,7 +208,7 @@ impl BRegressorCore {
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
-        max_layers: usize,
+        max_layers_without_improvement: usize,
         max_functions: usize,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -219,7 +219,7 @@ impl BRegressorCore {
                 batch_size,
                 sgd_steps,
                 parent_top_k,
-                max_layers,
+                max_layers_without_improvement,
                 max_functions,
             )
             .map_err(model_error)?,
@@ -264,7 +264,7 @@ struct BClassifierCore {
 #[pymethods]
 impl BClassifierCore {
     #[new]
-    #[pyo3(signature = (source_feature_count, n_classes, learning_rate=DEFAULT_CLASSIFIER_LEARNING_RATE, l2=DEFAULT_L2, batch_size=DEFAULT_CLASSIFIER_BATCH_SIZE, sgd_steps=DEFAULT_CLASSIFIER_SGD_STEPS, parent_top_k=8, max_layers=4, max_functions=96))]
+    #[pyo3(signature = (source_feature_count, n_classes, learning_rate=DEFAULT_CLASSIFIER_LEARNING_RATE, l2=DEFAULT_L2, batch_size=DEFAULT_CLASSIFIER_BATCH_SIZE, sgd_steps=DEFAULT_CLASSIFIER_SGD_STEPS, parent_top_k=8, max_layers_without_improvement=2, max_functions=96))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
@@ -274,7 +274,7 @@ impl BClassifierCore {
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
-        max_layers: usize,
+        max_layers_without_improvement: usize,
         max_functions: usize,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -286,7 +286,7 @@ impl BClassifierCore {
                 batch_size,
                 sgd_steps,
                 parent_top_k,
-                max_layers,
+                max_layers_without_improvement,
                 max_functions,
             )
             .map_err(model_error)?,

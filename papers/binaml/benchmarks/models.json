@@ -9,7 +9,7 @@
         "batch_size": 16,
         "sgd_steps": 20,
         "parent_top_k": 8,
-        "max_layers": 3,
+        "max_layers_without_improvement": 2,
         "max_functions": 64
       }
     },

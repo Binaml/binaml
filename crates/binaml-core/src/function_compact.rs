@@ -236,7 +236,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 2,
-            max_layers: 1,
+            max_layers_without_improvement: 1,
         };
         let model = FunctionBuilder::build(
             SignBatch {
@@ -277,7 +277,7 @@ mod tests {
         let config = FunctionBuildConfig {
             batch_size: 4,
             parent_top_k: 3,
-            max_layers: 2,
+            max_layers_without_improvement: 2,
         };
         let model = FunctionBuilder::build(
             SignBatch {

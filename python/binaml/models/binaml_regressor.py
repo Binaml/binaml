@@ -22,7 +22,7 @@ class BRegressor(PredictUpdateState):
         batch_size: int = 16,
         sgd_steps: int = 20,
         parent_top_k: int = 8,
-        max_layers: int = 3,
+        max_layers_without_improvement: int = 2,
         max_functions: int = 64,
     ) -> None:
         super().__init__()
@@ -53,7 +53,7 @@ class BRegressor(PredictUpdateState):
             batch_size,
             sgd_steps,
             parent_top_k,
-            max_layers,
+            max_layers_without_improvement,
             max_functions,
         )
 

@@ -10,7 +10,7 @@ pub(crate) struct EnsembleConfig {
     pub l2: f64,
     pub sgd_steps: usize,
     pub batch_size: usize,
-    pub max_layers: usize,
+    pub max_layers_without_improvement: usize,
     pub parent_top_k: usize,
     pub max_functions: usize,
 }
@@ -27,7 +27,7 @@ impl EnsembleConfig {
             || self.l2 < 0.0
             || self.sgd_steps == 0
             || self.parent_top_k == 0
-            || self.max_layers == 0
+            || self.max_layers_without_improvement == 0
         {
             return Err(EnsembleError::InvalidConfig);
         }
@@ -38,7 +38,7 @@ impl EnsembleConfig {
         FunctionBuildConfig {
             batch_size: self.batch_size,
             parent_top_k: self.parent_top_k,
-            max_layers: self.max_layers,
+            max_layers_without_improvement: self.max_layers_without_improvement,
         }
     }
 }

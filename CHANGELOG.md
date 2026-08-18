@@ -9,6 +9,9 @@ All notable changes to Binaml are documented here.
   features, `|assoc|` parent ranking, truth-table composition, and accuracy-based
   output selection with optional output inversion. Removed match-count,
   association-only, and hybrid-named builders from Rust bindings and benchmarks.
+- **Breaking:** replace fixed builder depth `max_layers` with
+  `max_layers_without_improvement`, stopping graph growth after consecutive
+  composed layers fail to improve in-sample accuracy.
 - **Breaking:** linear heads now use uncentered function activations $f_k(x)\in\{0,1\}$
   instead of $2f_k(x)-1$. Default \texttt{BRegressor} and \texttt{BClassifier}
   hyperparameters updated accordingly.
