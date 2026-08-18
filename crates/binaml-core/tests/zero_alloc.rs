@@ -1,6 +1,6 @@
 use binaml_core::{
-    BClassifier, BRegressor, FunctionBuildConfig, FunctionBuildSession, SignBatch,
-    DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES,
+    BClassifier, BRegressor, FunctionBuildConfig, FunctionBuildSession, SignBatch, DEFAULT_L_PAT,
+    DEFAULT_MAX_EXPERT_NODES,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,17 +34,12 @@ fn alloc_count() -> usize {
 #[test]
 fn zero_alloc_after_new_on_ensemble_hot_paths() {
     {
-        let mut model = BRegressor::with_hyperparameters(4, 0.1, 0.0, 4, 1, 4, 8, 32, 2)
-            .expect("valid config");
+        let mut model =
+            BRegressor::with_hyperparameters(4, 0.1, 0.0, 4, 1, 4, 8, 32, 2).expect("valid config");
         reset_alloc_counter();
 
         for step in 0..12 {
-            let features = [
-                step % 2 == 0,
-                step % 3 == 0,
-                step % 5 == 0,
-                step % 7 == 0,
-            ];
+            let features = [step % 2 == 0, step % 3 == 0, step % 5 == 0, step % 7 == 0];
             let target = if step % 2 == 0 { 1.0 } else { -1.0 };
             model.predict(&features).expect("predict");
             model.update(target).expect("update");

@@ -18,7 +18,7 @@ class SGDLinearClassifier(ReplayJAXModel):
         learning_rate: float = 0.035,
         l2: float = 0.0,
         center_binary_features: bool = False,
-        batch_size: int = 10,
+        batch_size: int = 1,
         sgd_steps: int = 6,
     ) -> None:
         if isinstance(n_classes, bool) or not isinstance(n_classes, int) or n_classes < 2:

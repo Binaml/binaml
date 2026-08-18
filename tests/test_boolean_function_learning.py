@@ -4,10 +4,10 @@ import sys
 import numpy as np
 from binaml._core import FunctionLearner
 from binaml.benchmarks.boolean_function_learning.batches import draw_split
+from binaml.benchmarks.boolean_function_learning.evaluate import association_score
 from binaml.benchmarks.boolean_function_learning.learners import (
     build_function_builder,
 )
-from binaml.benchmarks.boolean_function_learning.evaluate import association_score
 from binaml.benchmarks.scenario import expand_grid
 
 

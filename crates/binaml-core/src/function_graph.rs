@@ -52,8 +52,7 @@ impl FunctionGraph {
     pub(crate) fn copy_from(&mut self, other: &Self) {
         let source_len = other.n_sources as usize;
         let node_len = other.n_nodes as usize;
-        self.source_indices[..source_len]
-            .copy_from_slice(&other.source_indices[..source_len]);
+        self.source_indices[..source_len].copy_from_slice(&other.source_indices[..source_len]);
         self.nodes[..node_len].clone_from_slice(&other.nodes[..node_len]);
         self.n_sources = other.n_sources;
         self.n_nodes = other.n_nodes;
@@ -66,11 +65,6 @@ impl FunctionGraph {
         self.n_nodes = 0;
         self.output = 0;
         self.invert_output = false;
-    }
-
-    #[must_use]
-    pub fn evaluate(&self, features: &[bool]) -> bool {
-        self.evaluate_with_scratch(features, &mut vec![false; self.eval_scratch_len()])
     }
 
     pub(crate) fn evaluate_with_scratch(&self, features: &[bool], scratch: &mut [bool]) -> bool {
@@ -129,6 +123,10 @@ impl FunctionGraph {
 mod tests {
     use super::{CompactNode, FunctionGraph};
 
+    fn evaluate(function: &FunctionGraph, features: &[bool]) -> bool {
+        function.evaluate_with_scratch(features, &mut vec![false; function.eval_scratch_len()])
+    }
+
     const AND: u8 = 0b1000;
     const OR: u8 = 0b1110;
     const XOR: u8 = 0b0110;
@@ -142,8 +140,8 @@ mod tests {
     #[test]
     fn evaluates_source_node() {
         let function = graph(vec![1], vec![CompactNode::Source(0)], 0);
-        assert!(function.evaluate(&[false, true]));
-        assert!(!function.evaluate(&[true, false]));
+        assert!(evaluate(&function, &[false, true]));
+        assert!(!evaluate(&function, &[true, false]));
     }
 
     #[test]
@@ -153,8 +151,11 @@ mod tests {
             vec![CompactNode::Constant(true), CompactNode::Constant(false)],
             0,
         );
-        assert!(function.evaluate(&[]));
-        assert!(!graph(vec![], vec![CompactNode::Constant(false)], 0).evaluate(&[]));
+        assert!(evaluate(&function, &[]));
+        assert!(!evaluate(
+            &graph(vec![], vec![CompactNode::Constant(false)], 0),
+            &[]
+        ));
     }
 
     #[test]
@@ -172,10 +173,10 @@ mod tests {
             ],
             2,
         );
-        assert!(function.evaluate(&[true, true]));
-        assert!(!function.evaluate(&[true, false]));
-        assert!(!function.evaluate(&[false, true]));
-        assert!(!function.evaluate(&[false, false]));
+        assert!(evaluate(&function, &[true, true]));
+        assert!(!evaluate(&function, &[true, false]));
+        assert!(!evaluate(&function, &[false, true]));
+        assert!(!evaluate(&function, &[false, false]));
 
         let or_gate = graph(
             vec![0, 1],
@@ -190,10 +191,10 @@ mod tests {
             ],
             2,
         );
-        assert!(or_gate.evaluate(&[false, true]));
-        assert!(or_gate.evaluate(&[true, false]));
-        assert!(or_gate.evaluate(&[true, true]));
-        assert!(!or_gate.evaluate(&[false, false]));
+        assert!(evaluate(&or_gate, &[false, true]));
+        assert!(evaluate(&or_gate, &[true, false]));
+        assert!(evaluate(&or_gate, &[true, true]));
+        assert!(!evaluate(&or_gate, &[false, false]));
 
         let xor_gate = graph(
             vec![0, 1],
@@ -208,16 +209,16 @@ mod tests {
             ],
             2,
         );
-        assert!(xor_gate.evaluate(&[false, true]));
-        assert!(xor_gate.evaluate(&[true, false]));
-        assert!(!xor_gate.evaluate(&[true, true]));
-        assert!(!xor_gate.evaluate(&[false, false]));
+        assert!(evaluate(&xor_gate, &[false, true]));
+        assert!(evaluate(&xor_gate, &[true, false]));
+        assert!(!evaluate(&xor_gate, &[true, true]));
+        assert!(!evaluate(&xor_gate, &[false, false]));
     }
 
     #[test]
     fn missing_feature_defaults_to_false() {
         let function = graph(vec![3], vec![CompactNode::Source(0)], 0);
-        assert!(!function.evaluate(&[true, false]));
+        assert!(!evaluate(&function, &[true, false]));
     }
 
     #[test]
@@ -227,7 +228,7 @@ mod tests {
             vec![CompactNode::Constant(true), CompactNode::Constant(false)],
             1,
         );
-        assert!(!function.evaluate(&[]));
+        assert!(!evaluate(&function, &[]));
     }
 
     #[test]

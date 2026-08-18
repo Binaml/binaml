@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "name": "BRegressor",
+      "factory": "binaml.models:BRegressor",
+      "parameters": {
+        "learning_rate": 0.03,
+        "l2": 0.0005,
+        "batch_size": 1,
+        "sgd_steps": 20,
+        "parent_top_k": 8,
+        "l_pat": 5,
+        "max_functions": 64
+      }
+    },
+    {
+      "name": "MLPRegressor",
+      "factory": "binaml.models:MLPRegressor",
+      "parameters": {
+        "hidden_layer_sizes": [100, 100],
+        "learning_rate": 0.015,
+        "alpha": 0.001,
+        "batch_size": 1,
+        "sgd_steps": 3,
+        "random_state": 0
+      }
+    }
+  ]
+}

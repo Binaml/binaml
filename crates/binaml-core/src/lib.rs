@@ -17,8 +17,8 @@ pub use association::association_score;
 pub use batch::SignBatch;
 pub use classifier::{BClassifier, BClassifierError};
 pub use function_build_common::{
-    derive_build_capacity, BuildNodeId, DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES, EphemeralNode,
-    FunctionBuildConfig, FunctionBuildError, FunctionModel,
+    derive_build_capacity, BuildNodeId, EphemeralNode, FunctionBuildConfig, FunctionBuildError,
+    FunctionModel, DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES,
 };
 pub use function_builder::{FunctionBuildSession, FunctionBuilder};
 pub use regressor::{BRegressor, BRegressorError};

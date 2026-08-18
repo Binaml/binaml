@@ -159,12 +159,18 @@ pub(crate) fn correct_count(values: &[bool], signs: &[bool]) -> u8 {
     .expect("batch size fits in u8")
 }
 
-pub(crate) fn validate_batch(batch: SignBatch<'_>, batch_size: usize) -> Result<(), FunctionBuildError> {
+pub(crate) fn validate_batch(
+    batch: SignBatch<'_>,
+    batch_size: usize,
+) -> Result<(), FunctionBuildError> {
     if batch.signs.len() != batch_size || batch.feature_count() == 0 {
         return Err(FunctionBuildError::InvalidBatch);
     }
     for index in 0..batch.feature_count() {
-        if batch.column(index).is_none_or(|column| column.len() != batch_size) {
+        if batch
+            .column(index)
+            .is_none_or(|column| column.len() != batch_size)
+        {
             return Err(FunctionBuildError::InvalidBatch);
         }
     }
@@ -172,10 +178,7 @@ pub(crate) fn validate_batch(batch: SignBatch<'_>, batch_size: usize) -> Result<
 }
 
 pub(crate) fn validate_feature_batch(batch: SignBatch<'_>) -> Result<(), FunctionBuildError> {
-    let batch_size = batch
-        .column(0)
-        .map(|column| column.len())
-        .unwrap_or(0);
+    let batch_size = batch.column(0).map(|column| column.len()).unwrap_or(0);
     validate_feature_batch_with_size(batch, batch_size)
 }
 
@@ -187,7 +190,10 @@ fn validate_feature_batch_with_size(
         return Err(FunctionBuildError::InvalidBatch);
     }
     for index in 0..batch.feature_count() {
-        if batch.column(index).is_none_or(|column| column.len() != batch_size) {
+        if batch
+            .column(index)
+            .is_none_or(|column| column.len() != batch_size)
+        {
             return Err(FunctionBuildError::InvalidBatch);
         }
     }

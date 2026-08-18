@@ -16,10 +16,10 @@ class MLPClassifier(ReplayJAXModel):
         self,
         n_features: int,
         n_classes: int,
-        hidden_layer_sizes: int | Sequence[int] = (75,),
+        hidden_layer_sizes: int | Sequence[int] = (50, 32, 16),
         learning_rate: float = 0.012,
-        alpha: float = 0.0,
-        batch_size: int = 12,
+        alpha: float = 1e-4,
+        batch_size: int = 1,
         sgd_steps: int = 6,
         random_state: int | None = 0,
     ) -> None:

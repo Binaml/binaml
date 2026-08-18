@@ -138,7 +138,8 @@ impl FunctionLearner {
         let batch = SignBatch::from_columns(&column_refs, &signs);
         let started = Instant::now();
         let (model, score) =
-            FunctionBuilder::fit(batch, self.build_config(batch_size, column_refs.len())).map_err(model_error)?;
+            FunctionBuilder::fit(batch, self.build_config(batch_size, column_refs.len()))
+                .map_err(model_error)?;
         self.model = Some(model);
         let dict = PyDict::new(py);
         dict.set_item("score", i64::from(score))?;

@@ -514,15 +514,15 @@ function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
-$\eta=3\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$, expert batch size
-$B=16$, twenty single-sample SGD steps, parent top-$K_p=8$, and ensemble capacity $K_{\max}=64$.  Each expert
+$\eta=4\times10^{-2}$, $\ell_2$ decay $2\times10^{-3}$, expert batch size
+$B=4$, thirty-five single-sample SGD steps, parent top-$K_p=4$, ensemble capacity $K_{\max}=48$, and $64$ expert nodes per function.  Each expert
 enters the linear head as $f_k(x)\in\{0,1\}$.  The linear baseline is a
-JAX replay-batch implementation using learning rate $0.03$, the same
-decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
-baseline is a JAX one-hidden-layer ReLU network using replay size 32 and three
-full-batch SGD steps; one 50-unit hidden layer; constant learning rate
-$0.003$, $\alpha=10^{-4}$, and random state zero.  Linear and MLP baselines
-share the same float32 replay SGD scaffold.
+JAX replay-batch implementation using learning rate $0.01$, decay
+$10^{-4}$, replay size $B=1$, one full-batch SGD step, and uncentered binary
+inputs.  The MLP baseline is a JAX two-layer ReLU network using replay size
+$B=1$ and three full-batch SGD steps; hidden layers of 100 and 100 units;
+constant learning rate $0.015$, $\alpha=10^{-3}$, and random state zero.  Linear
+and MLP baselines share the same float32 replay SGD scaffold.
 
 Tables report the mean $\pm$ standard error over five seeds.  MSE is the
 optimized loss; RMSE expresses the same error in target units.  Total time is
@@ -534,9 +534,9 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $\boldsymbol{0.400\pm0.011}$ & $\boldsymbol{0.632\pm0.009}$ & $\boldsymbol{0.021\pm0.000}$ \\
-Linear SGD (JAX) & $0.825\pm0.024$ & $0.908\pm0.013$ & $4.769\pm0.015$ \\
-MLP SGD (JAX) & $0.907\pm0.018$ & $0.952\pm0.009$ & $6.373\pm0.157$ \\
+BRegressor (ours) & $0.367\pm0.012$ & $0.606\pm0.010$ & $\boldsymbol{0.024\pm0.000}$ \\
+Linear SGD (JAX) & $0.486\pm0.009$ & $0.697\pm0.006$ & $1.120\pm0.018$ \\
+MLP SGD (JAX) & $0.362\pm0.003$ & $\boldsymbol{0.602\pm0.003}$ & $2.208\pm0.037$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -548,10 +548,13 @@ regression default, with three classes and per-class gates, weights, and
 intercepts.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/default\_multiclass.json} and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
-learning rate $\eta=1.2\times10^{-1}$, $\ell_2$ decay $5\times10^{-4}$,
-expert batch size $B=12$, thirty single-sample SGD steps, and the same
-structural limits as \texttt{BRegressor}; linear and MLP classifier baselines
-mirror their regression counterparts with softmax cross-entropy.  Reported
+learning rate $\eta=2.2\times10^{-1}$, $\ell_2$ decay $5\times10^{-4}$,
+expert batch size $B=8$, twenty single-sample SGD steps, parent top-$K_p=16$,
+ensemble capacity $K_{\max}=64$, and $32$ expert nodes per function.  The linear classifier baseline uses
+learning rate $0.035$, replay size $B=1$, and six SGD steps; the MLP classifier
+baseline uses three ReLU hidden layers of 50, 32, and 16 units, learning rate
+$0.012$, decay $10^{-4}$, replay size $B=1$, and six SGD steps, both with
+softmax cross-entropy.  Reported
 comparisons use prequential accuracy over the same seed set after optional
 warm-up exclusion.
 
@@ -566,9 +569,9 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $\boldsymbol{0.765\pm0.021}$ & $\boldsymbol{0.035\pm0.001}$ \\
-Linear SGD (JAX) & $0.653\pm0.038$ & $0.811\pm0.012$ \\
-MLP SGD (JAX) & $0.645\pm0.041$ & $1.114\pm0.007$ \\
+BClassifier (ours) & $0.768\pm0.021$ & $\boldsymbol{0.045\pm0.001}$ \\
+Linear SGD (JAX) & $0.764\pm0.021$ & $0.951\pm0.005$ \\
+MLP SGD (JAX) & $0.764\pm0.024$ & $1.990\pm0.221$ \\
 \hline
 \end{tabular}
 \end{center}

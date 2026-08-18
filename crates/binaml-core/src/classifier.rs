@@ -95,7 +95,8 @@ impl BClassifier {
 
     #[must_use]
     pub fn weight(&self, function_index: usize, class_index: usize) -> Option<f64> {
-        if function_index >= self.ensemble.head.active || class_index >= self.ensemble.head.n_classes
+        if function_index >= self.ensemble.head.active
+            || class_index >= self.ensemble.head.n_classes
         {
             return None;
         }

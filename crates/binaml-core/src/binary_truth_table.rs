@@ -16,25 +16,6 @@ pub enum FeatureCounterError {
 impl FeatureCounter {
     pub const MAX_BATCH_SIZE: usize = u8::MAX as usize;
 
-    /// Learns the error-minimizing table for a bounded batch.
-    ///
-    /// Returns `BatchTooLarge` when the batch exceeds the capacity of one
-    /// counter slot. With a valid batch, no slot can exceed `u8::MAX`, even if
-    /// every observation has the same value.
-    #[inline]
-    pub fn from_batch(batch: &[(bool, bool, bool)]) -> Result<Self, FeatureCounterError> {
-        if batch.len() > Self::MAX_BATCH_SIZE {
-            return Err(FeatureCounterError::BatchTooLarge);
-        }
-
-        let mut counts = [0_u8; 8];
-        for &(x0, x1, output) in batch {
-            let slot = (u8::from(x0) << 2) | (u8::from(x1) << 1) | u8::from(output);
-            counts[slot as usize] += 1;
-        }
-        Ok(Self { counts })
-    }
-
     #[inline]
     pub fn from_columns(
         first: &[bool],
@@ -74,13 +55,24 @@ impl FeatureCounter {
         let abs_assoc = (batch_size * nzy - nz * ny).abs();
         (table, abs_assoc, matches)
     }
+}
 
-    /// Returns the packed four-entry, error-minimizing truth table.
-    ///
-    /// Bit `p` is the output for partition
-    /// `p = (x0 << 1) | x1`. Ties resolve to zero.
-    #[inline]
-    pub fn truth_table(&self) -> u8 {
+#[cfg(test)]
+impl FeatureCounter {
+    fn from_batch(batch: &[(bool, bool, bool)]) -> Result<Self, FeatureCounterError> {
+        if batch.len() > Self::MAX_BATCH_SIZE {
+            return Err(FeatureCounterError::BatchTooLarge);
+        }
+
+        let mut counts = [0_u8; 8];
+        for &(x0, x1, output) in batch {
+            let slot = (u8::from(x0) << 2) | (u8::from(x1) << 1) | u8::from(output);
+            counts[slot as usize] += 1;
+        }
+        Ok(Self { counts })
+    }
+
+    fn truth_table(&self) -> u8 {
         let mut table = 0_u8;
         for partition in 0_u8..4 {
             let base = (partition << 1) as usize;

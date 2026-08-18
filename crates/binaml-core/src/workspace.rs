@@ -1,10 +1,9 @@
 use crate::function_build_common::{
-    derive_build_capacity, BuildNodeId, DEFAULT_L_PAT, EphemeralNode, FunctionBuildConfig,
-    PairCandidate,
+    derive_build_capacity, BuildNodeId, EphemeralNode, PairCandidate,
 };
 use crate::function_graph::CompactNode;
-use crate::SignBatch;
 use crate::FeatureCounter;
+use crate::SignBatch;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModelCapacity {
@@ -55,17 +54,6 @@ impl ModelCapacity {
             return Err(WorkspaceError::InvalidConfig);
         }
         Ok(())
-    }
-
-    pub fn build_config(&self) -> FunctionBuildConfig {
-        FunctionBuildConfig {
-            batch_size: self.batch_size,
-            parent_top_k: self.parent_top_k,
-            max_composed_layers: self.l_build,
-            max_graph_nodes: self.graph_nodes,
-            max_expert_nodes: self.max_expert_nodes,
-            l_pat: DEFAULT_L_PAT,
-        }
     }
 }
 
@@ -219,7 +207,6 @@ pub(crate) struct BuildWorkspace {
     pub compact_reachable: Box<[bool]>,
     pub compact_old_to_new: Box<[u16]>,
     pub compact_order: Box<[u16]>,
-    pub capacity: ModelCapacity,
 }
 
 impl BuildWorkspace {
@@ -239,11 +226,7 @@ impl BuildWorkspace {
             layer_count: 1,
             parent_buf: vec![BuildNodeId(0); k_p].into_boxed_slice(),
             rank_scratch: vec![BuildNodeId(0); v].into_boxed_slice(),
-            column_cache: FlatColumnCache::new(
-                capacity.batch_size,
-                capacity.parent_top_k,
-                v,
-            ),
+            column_cache: FlatColumnCache::new(capacity.batch_size, capacity.parent_top_k, v),
             pair_scratch: vec![FeatureCounter::default(); p].into_boxed_slice(),
             pair_candidates: vec![
                 PairCandidate {
@@ -265,7 +248,6 @@ impl BuildWorkspace {
             compact_reachable: vec![false; v].into_boxed_slice(),
             compact_old_to_new: vec![crate::function_compact::NO_MAP; v].into_boxed_slice(),
             compact_order: vec![0_u16; v].into_boxed_slice(),
-            capacity,
         }
     }
 
@@ -299,14 +281,6 @@ impl BuildWorkspace {
         self.layer_ends[end_index] += 1;
     }
 
-    pub fn truncate_current_layer(&mut self, keep: usize) {
-        let end_index = self.layer_count as usize;
-        let start = self.layer_ends[end_index - 1] as usize;
-        let end = self.layer_ends[end_index] as usize;
-        let keep = keep.min(end - start);
-        self.layer_ends[end_index] = u16::try_from(start + keep).expect("layer fits in u16");
-    }
-
     pub fn start_new_layer(&mut self) {
         let next = self.layer_count as usize + 1;
         self.layer_ends[next] = self.layer_ends[self.layer_count as usize];
@@ -320,10 +294,6 @@ impl BuildWorkspace {
                 self.layer_ends[self.layer_count as usize];
         }
     }
-
-    pub fn surviving_nodes(&self) -> &[BuildNodeId] {
-        &self.layer_ids[..self.current_layer_end()]
-    }
 }
 
 #[derive(Debug)]
@@ -333,12 +303,10 @@ pub(crate) struct EnsembleWorkspace {
     pub pending_function_values: Box<[bool]>,
     pub eval_scratch: Box<[bool]>,
     pub logits: Box<[f64]>,
-    pub probabilities: Box<[f64]>,
     pub batch_features: Box<[bool]>,
     pub batch_signs: Box<[bool]>,
     pub batch_len: usize,
     pub build: BuildWorkspace,
-    pub capacity: ModelCapacity,
 }
 
 impl EnsembleWorkspace {
@@ -355,21 +323,10 @@ impl EnsembleWorkspace {
             pending_function_values: vec![false; k_max].into_boxed_slice(),
             eval_scratch: vec![false; n_max].into_boxed_slice(),
             logits: vec![0.0; c].into_boxed_slice(),
-            probabilities: vec![0.0; c].into_boxed_slice(),
             batch_features: vec![false; b * d].into_boxed_slice(),
             batch_signs: vec![false; b].into_boxed_slice(),
             batch_len: 0,
             build: BuildWorkspace::new(capacity),
-            capacity,
         })
-    }
-
-    pub fn sign_batch(&self, batch_size: usize) -> crate::SignBatch<'_> {
-        crate::SignBatch::from_flat(
-            &self.batch_features[..batch_size * self.capacity.source_feature_count],
-            batch_size,
-            self.capacity.source_feature_count,
-            &self.batch_signs[..batch_size],
-        )
     }
 }

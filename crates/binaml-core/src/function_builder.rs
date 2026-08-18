@@ -44,11 +44,17 @@ impl FunctionBuildSession {
         })
     }
 
-    pub fn build(&mut self, batch: SignBatch<'_>) -> Result<(BuildNodeId, bool), FunctionBuildError> {
+    pub fn build(
+        &mut self,
+        batch: SignBatch<'_>,
+    ) -> Result<(BuildNodeId, bool), FunctionBuildError> {
         FunctionBuilder::build_in_workspace(batch, self.config, &mut self.workspace)
     }
 
-    pub fn build_model(&mut self, batch: SignBatch<'_>) -> Result<FunctionModel, FunctionBuildError> {
+    pub fn build_model(
+        &mut self,
+        batch: SignBatch<'_>,
+    ) -> Result<FunctionModel, FunctionBuildError> {
         let (output, invert_output) = self.build(batch)?;
         compact_build_workspace_into(
             &mut self.workspace,
@@ -79,7 +85,7 @@ impl FunctionBuilder {
         FunctionBuildSession::new(config, batch.feature_count())?.build_model(batch)
     }
 
-    pub fn build_in_workspace(
+    pub(crate) fn build_in_workspace(
         batch: SignBatch<'_>,
         config: FunctionBuildConfig,
         workspace: &mut BuildWorkspace,
@@ -89,13 +95,9 @@ impl FunctionBuilder {
 
         workspace.reset();
         let source_count = batch.feature_count();
-        let batch_size_i64 = i64::try_from(config.batch_size)
-            .expect("batch size validated to fit in i64");
-        let ny = batch
-            .signs
-            .iter()
-            .filter(|sign| **sign)
-            .count() as i64;
+        let batch_size_i64 =
+            i64::try_from(config.batch_size).expect("batch size validated to fit in i64");
+        let ny = batch.signs.iter().filter(|sign| **sign).count() as i64;
 
         for input_index in 0..source_count {
             let column = batch
@@ -131,9 +133,8 @@ impl FunctionBuilder {
         let layer_zero_start = workspace.layer_ends[0] as usize;
         let layer_zero_end = workspace.layer_ends[1] as usize;
         let layer_zero_len = layer_zero_end - layer_zero_start;
-        workspace.parent_buf[..layer_zero_len].copy_from_slice(
-            &workspace.layer_ids[layer_zero_start..layer_zero_end],
-        );
+        workspace.parent_buf[..layer_zero_len]
+            .copy_from_slice(&workspace.layer_ids[layer_zero_start..layer_zero_end]);
         for index in 0..layer_zero_len {
             ensure_column(workspace, batch, workspace.parent_buf[index])?;
         }
@@ -141,8 +142,8 @@ impl FunctionBuilder {
             .column_cache
             .retain_only(&workspace.parent_buf[..layer_zero_len]);
 
-        let batch_size_u8 = u8::try_from(config.batch_size)
-            .expect("batch size validated to fit in u8");
+        let batch_size_u8 =
+            u8::try_from(config.batch_size).expect("batch size validated to fit in u8");
         let mut best_accuracy = workspace.accuracy_scores[..workspace.node_len]
             .iter()
             .copied()
@@ -175,13 +176,8 @@ impl FunctionBuilder {
                 break;
             }
 
-            let candidate_count = score_pairs_into_workspace(
-                workspace,
-                parent_len,
-                batch,
-                batch_size_i64,
-                ny,
-            )?;
+            let candidate_count =
+                score_pairs_into_workspace(workspace, parent_len, batch, batch_size_i64, ny)?;
             if candidate_count == 0 {
                 break;
             }
@@ -229,9 +225,9 @@ impl FunctionBuilder {
 
             let new_layer_start = workspace.layer_ends[workspace.layer_count as usize - 1] as usize;
             let new_layer_end = workspace.current_layer_end();
-            workspace.column_cache.retain_only(
-                &workspace.layer_ids[new_layer_start..new_layer_end],
-            );
+            workspace
+                .column_cache
+                .retain_only(&workspace.layer_ids[new_layer_start..new_layer_end]);
 
             let new_best = workspace.accuracy_scores[..workspace.node_len]
                 .iter()
@@ -252,14 +248,15 @@ impl FunctionBuilder {
         let surviving_len = workspace.current_layer_end();
         workspace.rank_scratch[..surviving_len]
             .copy_from_slice(&workspace.layer_ids[..surviving_len]);
-        let (output, invert_output) = crate::function_build_common::select_output_top_k_by_association_in_place(
-            &mut workspace.rank_scratch,
-            surviving_len,
-            &workspace.association_scores[..workspace.node_len],
-            &workspace.accuracy_scores[..workspace.node_len],
-            batch_size_u8,
-            config.parent_top_k,
-        );
+        let (output, invert_output) =
+            crate::function_build_common::select_output_top_k_by_association_in_place(
+                &mut workspace.rank_scratch,
+                surviving_len,
+                &workspace.association_scores[..workspace.node_len],
+                &workspace.accuracy_scores[..workspace.node_len],
+                batch_size_u8,
+                config.parent_top_k,
+            );
 
         Ok((output, invert_output))
     }
@@ -355,11 +352,8 @@ fn score_pairs_into_workspace(
             if is_constant_column(first_column) || is_constant_column(second_column) {
                 continue;
             }
-            let counter = crate::FeatureCounter::from_columns(
-                first_column,
-                second_column,
-                batch.signs,
-            )?;
+            let counter =
+                crate::FeatureCounter::from_columns(first_column, second_column, batch.signs)?;
             workspace.pair_scratch[pair_index] = counter;
             pair_index += 1;
             let (truth_table, abs_assoc, matches) =
@@ -416,11 +410,9 @@ mod tests {
         let second = [false, false, true, true];
         let columns = [&first[..], &second[..]];
         let signs = [false, true, true, true];
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config(4, 2, 2),
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config(4, 2, 2))
+                .unwrap();
         assert!(model.graph.node_count() >= 2);
         assert!(!model.graph.invert_output());
         assert!(model
@@ -436,11 +428,9 @@ mod tests {
         let varying = [false, true, false, true];
         let columns = [&constant[..], &varying[..]];
         let signs = [false, true, false, true];
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config(4, 2, 2),
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config(4, 2, 2))
+                .unwrap();
         assert_eq!(model.graph.source_count(), 1);
         assert_eq!(model.graph.node_count(), 1);
     }
@@ -452,11 +442,9 @@ mod tests {
         let c = [false, true, false, true];
         let columns = [&a[..], &b[..], &c[..]];
         let signs = [false, true, false, true];
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config(4, 2, 3),
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config(4, 2, 3))
+                .unwrap();
         assert_eq!(model.graph.source_count(), 1);
         assert_eq!(model.graph.node_count(), 1);
     }
@@ -496,11 +484,9 @@ mod tests {
         let second = [false, false, true, true];
         let columns = [&first[..], &second[..]];
         let signs = [false, true, true, true];
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config(4, 2, 2),
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config(4, 2, 2))
+                .unwrap();
         let holdout_first = [false, true];
         let holdout_second = [true, true];
         let holdout_columns = [&holdout_first[..], &holdout_second[..]];

@@ -4,14 +4,13 @@
       "name": "BRegressor",
       "factory": "binaml.models:BRegressor",
       "parameters": {
-        "learning_rate": 0.04,
-        "l2": 0.002,
-        "batch_size": 4,
-        "sgd_steps": 35,
-        "parent_top_k": 4,
-        "l_pat": 6,
-        "max_functions": 48,
-        "max_expert_nodes": 64
+        "learning_rate": 0.05,
+        "l2": 0.0005,
+        "batch_size": 1,
+        "sgd_steps": 10,
+        "parent_top_k": 8,
+        "l_pat": 5,
+        "max_functions": 64
       }
     },
     {
@@ -29,11 +28,11 @@
       "name": "MLPRegressor",
       "factory": "binaml.models:MLPRegressor",
       "parameters": {
-        "hidden_layer_sizes": [100, 100],
-        "learning_rate": 0.015,
-        "alpha": 0.001,
+        "hidden_layer_sizes": [50],
+        "learning_rate": 0.01,
+        "alpha": 0.0001,
         "batch_size": 1,
-        "sgd_steps": 3,
+        "sgd_steps": 1,
         "random_state": 0
       }
     }

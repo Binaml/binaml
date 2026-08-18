@@ -1,8 +1,6 @@
 use crate::function_compact::{compact_build_workspace_into, CompactError};
 use crate::workspace::{EnsembleWorkspace, ModelCapacity, WorkspaceError};
-use crate::{
-    FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
-};
+use crate::{FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EnsembleConfig {
@@ -154,23 +152,12 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         self.head.active()
     }
 
-    fn function_values(&mut self, features: &[bool]) -> &[bool] {
-        let count = self.function_count();
-        for index in 0..count {
-            self.workspace.function_values[index] = self.functions[index]
-                .evaluate_with_scratch(features, &mut self.workspace.eval_scratch);
-        }
-        &self.workspace.function_values[..count]
-    }
-
     pub fn begin_predict(&mut self, features: &[bool]) -> Result<(), EnsembleError> {
         if self.pending {
             return Err(EnsembleError::PendingPrediction);
         }
         self.validate_features(features)?;
-        self.workspace
-            .pending_features
-            .copy_from_slice(features);
+        self.workspace.pending_features.copy_from_slice(features);
         let count = self.function_count();
         for index in 0..count {
             self.workspace.function_values[index] = self.functions[index]
@@ -311,7 +298,12 @@ impl EnsembleHead for RegressionHead {
             *weight *= decay;
         }
         self.intercept += rate * error;
-        for (weight, value) in self.weights.iter_mut().take(self.active).zip(function_values) {
+        for (weight, value) in self
+            .weights
+            .iter_mut()
+            .take(self.active)
+            .zip(function_values)
+        {
             *weight += rate * error * f64::from(*value);
         }
     }
@@ -396,11 +388,7 @@ impl ClassificationHead {
         }
     }
 
-    pub fn predict_with_scratch(
-        &self,
-        function_values: &[bool],
-        logits: &mut [f64],
-    ) -> usize {
+    pub fn predict_with_scratch(&self, function_values: &[bool], logits: &mut [f64]) -> usize {
         self.logits_into(function_values, logits);
         argmax(logits)
     }
@@ -412,12 +400,6 @@ impl ClassificationHead {
         logits: &mut [f64],
     ) -> bool {
         self.predict_with_scratch(function_values, logits) != target
-    }
-
-    pub fn logits(&self, function_values: &[bool]) -> Vec<f64> {
-        let mut logits = vec![0.0; self.n_classes];
-        self.logits_into(function_values, &mut logits);
-        logits
     }
 }
 
@@ -445,8 +427,7 @@ impl EnsembleHead for ClassificationHead {
             let activation = f64::from(*value);
             let start = function_index * self.n_classes;
             for class_index in 0..self.n_classes {
-                self.logits_scratch[class_index] +=
-                    self.weights[start + class_index] * activation;
+                self.logits_scratch[class_index] += self.weights[start + class_index] * activation;
             }
         }
         softmax_into(&self.logits_scratch, &mut self.probabilities_scratch);
@@ -454,9 +435,8 @@ impl EnsembleHead for ClassificationHead {
         const MAX_CLASSES: usize = 64;
         let mut errors = [0.0_f64; MAX_CLASSES];
         assert!(self.n_classes <= MAX_CLASSES);
-        for class_index in 0..self.n_classes {
-            errors[class_index] = self.probabilities_scratch[class_index]
-                - f64::from(class_index == target);
+        for (class_index, error) in errors.iter_mut().enumerate().take(self.n_classes) {
+            *error = self.probabilities_scratch[class_index] - f64::from(class_index == target);
         }
         for function_index in 0..self.active {
             for weight in self.expert_weights_mut(function_index) {

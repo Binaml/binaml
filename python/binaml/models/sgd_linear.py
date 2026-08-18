@@ -13,11 +13,11 @@ class SGDLinearRegressor(ReplayJAXModel):
     def __init__(
         self,
         n_features: int,
-        learning_rate: float = 0.03,
+        learning_rate: float = 0.01,
         l2: float = 1e-4,
         center_binary_features: bool = False,
-        batch_size: int = 32,
-        sgd_steps: int = 3,
+        batch_size: int = 1,
+        sgd_steps: int = 1,
     ) -> None:
         try:
             from .jax.linear import init_linear, linear_forward

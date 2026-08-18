@@ -27,10 +27,10 @@ class MLPRegressor(ReplayJAXModel):
     def __init__(
         self,
         n_features: int,
-        hidden_layer_sizes: int | Sequence[int] = (50,),
-        learning_rate: float = 0.003,
-        alpha: float = 1e-4,
-        batch_size: int = 32,
+        hidden_layer_sizes: int | Sequence[int] = (100, 100),
+        learning_rate: float = 0.015,
+        alpha: float = 1e-3,
+        batch_size: int = 1,
         sgd_steps: int = 3,
         random_state: int | None = 0,
     ) -> None:

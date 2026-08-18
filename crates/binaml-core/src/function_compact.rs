@@ -248,7 +248,11 @@ pub(crate) fn compact_build_workspace_into(
     Ok(())
 }
 
-fn find_or_insert_source(sources: &mut [usize], source_count: &mut usize, input_index: usize) -> usize {
+fn find_or_insert_source(
+    sources: &mut [usize],
+    source_count: &mut usize,
+    input_index: usize,
+) -> usize {
     for (index, &existing) in sources.iter().enumerate().take(*source_count) {
         if existing == input_index {
             return index;
@@ -313,11 +317,8 @@ mod tests {
         let columns = [&first[..], &second[..]];
         let signs = [false, true, false, true];
         let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config,
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config).unwrap();
         assert!(model.graph.source_count() <= 2);
     }
 
@@ -352,11 +353,8 @@ mod tests {
         let columns = [&first[..], &second[..], &third[..]];
         let signs = [false, true, true, false];
         let config = FunctionBuildConfig::new(4, 3, 3, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
-        let model = FunctionBuilder::build(
-            SignBatch::from_columns(&columns, &signs),
-            config,
-        )
-        .unwrap();
+        let model =
+            FunctionBuilder::build(SignBatch::from_columns(&columns, &signs), config).unwrap();
         for (index, node) in model.graph.nodes().iter().enumerate() {
             if let CompactNode::Composed { first, second, .. } = node {
                 assert!(first < &index);
