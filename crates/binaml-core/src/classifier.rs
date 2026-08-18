@@ -60,6 +60,7 @@ impl BClassifier {
         parent_top_k: usize,
         max_functions: usize,
         max_expert_nodes: usize,
+        l_pat: usize,
     ) -> Result<Self, BClassifierError> {
         Self::new(
             source_feature_count,
@@ -72,6 +73,7 @@ impl BClassifier {
                 parent_top_k,
                 max_functions,
                 max_expert_nodes,
+                l_pat,
             },
         )
     }
@@ -122,7 +124,7 @@ mod tests {
     use super::BClassifier;
 
     fn model(batch_size: usize, max_functions: usize) -> BClassifier {
-        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 8, max_functions, 64)
+        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 8, max_functions, 64, 2)
             .unwrap()
     }
 

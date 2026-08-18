@@ -19,13 +19,14 @@ preallocation at `BooleanEnsemble::new` is still outstanding.
 | Piece | Location | Status |
 |-------|----------|--------|
 | **Top-`K_p` per layer** | `function_builder.rs` | Layer 0 trimmed to top-`K_p` sources by \|association\|. Each composed layer evaluates all `P` parent pairs but **keeps only top-`K_p`** candidates by \|association\|. |
-| **`ColumnCache`** | `function_build_common.rs` | Lazy `B`-length activation columns keyed by `BuildNodeId`. **`retain_only`** after each layer → resident columns ≈ **`K_p`**, not one per historical node. Still **`Vec<Option<Vec<bool>>>`** with heap `Vec` per slot. |
+| **`ColumnCache`** | `workspace.rs` (`FlatColumnCache`) | Fixed `2·K_p` column slots × `B` in `BuildWorkspace`; **`retain_only`** after each layer. Legacy heap `ColumnCache` remains in `function_build_common.rs` for tests/helpers. |
 | **`PairCounterScratch`** | `function_build_common.rs` | Pre-sized once to **`P = K_p(K_p−1)/2`** `FeatureCounter` slots; reused each layer during pair scoring. |
 | **Pair scoring** | `binary_truth_table.rs` | `from_columns` + `truth_table_and_scores` on cached parent columns. Constant truth tables (`0b0000`, `0b1111`) and constant parent columns are **skipped**. Composed column materialized only for kept nodes. |
 | **Output selection** | `select_output_top_k_by_association` | Among **surviving** nodes, take top-`K_p` by \|association\|, then pick best **accuracy** (with invert). Not global over all ephemeral nodes. |
-| **`L_build` stop** | `FunctionBuildConfig::max_composed_layers` | Derived from `DEFAULT_MAX_EXPERT_NODES` (64), `d`, and `K_p` via `derive_build_capacity`. Builder runs until this composed-layer cap unless accuracy is perfect or no valid pairs remain. |
-| **Graph / scores** | `function_builder.rs` | `EphemeralGraph`, `association_scores`, `accuracy_scores` still grow via `Vec` push (bounded in practice by **`V`** below, not enforced yet). |
-| **Predict** | `predict_model` → `node_column` | Still **`HashMap<BuildNodeId, Vec<bool>>`** plus fresh `Vec` per call. |
+| **`L_build` cap** | `FunctionBuildConfig::max_composed_layers` | Derived from `DEFAULT_MAX_EXPERT_NODES` (64), `d`, and `K_p` via `derive_build_capacity`. Hard memory ceiling on composed layers. |
+| **`l_pat` stop** | `FunctionBuildConfig::l_pat` | Public patience: stop after `l_pat` consecutive composed layers with no global in-sample accuracy improvement (`DEFAULT_L_PAT = 2`). |
+| **Graph / scores** | `function_builder.rs` | Preallocated workspace buffers sized by **`V`**; builder loop bounded by **`l_pat`** and **`L_build`**. |
+| **Predict** | `FunctionGraph::eval` | Preallocated `eval_scratch: [bool; N_max]` on ensemble hot path; standalone `predict_model` still uses heap `HashMap` for tests. |
 
 **Target mapping:** replace heap pools with fixed workspace sized from `K_p`,
 `L_build`, and `N_max` (see layouts below). Algorithm semantics above should
@@ -41,9 +42,10 @@ be preserved; only storage moves into `EnsembleWorkspace`.
 | η | Learning rate | `learning_rate` | `learning_rate` |
 | λ | L2 decay | `l2` | `l2` |
 | `K_p` | Per-layer width cap | `parent_top_k` | `parent_top_k` |
-| `L_build` | Max composed layers (derived) | `max_composed_layers` in `FunctionBuildConfig` | — |
+| `L_build` | Max composed layers (derived, memory) | `max_composed_layers` in `FunctionBuildConfig` | — |
+| `l_pat` | Layer patience (runtime early stop) | `l_pat` in `FunctionBuildConfig` / `EnsembleConfig` | `l_pat` |
 | `K_max` | Ensemble capacity | `max_functions` | `max_functions` |
-| `N_max` | Max compact nodes per stored expert | **`max_expert_nodes`** (new, **only new public cap**) | **`max_expert_nodes`** |
+| `N_max` | Max compact nodes per stored expert | `max_expert_nodes` | `max_expert_nodes` |
 | `P` | Pair **scratch** slots per layer | `K_p*(K_p-1)/2` | — |
 | `V` | Max ephemeral **graph** nodes | `K_p.min(d) + L_build*K_p + 1` | — |
 | `C` | Number of classes | `n_classes` | `n_classes` |
@@ -56,16 +58,18 @@ is `K_p`; experts are `F` capped by `K_max`.
 ## Config simplification
 
 Build graphs and build workspace are **narrow** (`K_p` wide); stored experts are
-**narrower still** (`N_k` ≤ `N_max` ≪ `V` after compaction). Only
-**`max_expert_nodes`** (`N_max`) is new on the public API. Build pool size
-**`V`**, pair scratch **`P`**, and layer cap **`L_build`** are **derived** from
-`N_max`, `K_p`, and `d` at `BooleanEnsemble::new`.
+**narrower still** (`N_k` ≤ `N_max` ≪ `V` after compaction). **`max_expert_nodes`**
+(`N_max`) is the new memory cap on stored experts. **`l_pat`** is the restored
+public patience for batch graph growth. Build pool size **`V`**, pair scratch
+**`P`**, and layer cap **`L_build`** are **derived** from `N_max`, `K_p`, and
+`d` at `BooleanEnsemble::new`.
 
 **Policy:**
 
 | | User-facing? | Role |
 |--|--------------|------|
 | `max_expert_nodes` (`N_max`) | **Yes** | Caps stored `CompactNode` count, inference scratch, and (via derivation) build workspace |
+| `l_pat` | **Yes** | Stop after `l_pat` consecutive composed layers without global accuracy improvement |
 | `parent_top_k` (`K_p`) | **Yes** (existing) | Caps nodes **kept** per layer; sizes parent pool, pair scratch, and column cache |
 | `P`, `V`, `L_build` | **No** — derived | Preallocated builder buffers |
 
@@ -142,11 +146,15 @@ Example: `N_max = 64`, `K_p = 8`, `d = 32` → `P = 28`, `L_build = 56`,
 
 | Parameter | Meaning |
 |-----------|---------|
-| `L_build` | Hard max composed layers (memory derivation + builder stop) |
+| `L_build` | Hard max composed layers (memory derivation + safety ceiling) |
+| `l_pat` | Runtime patience: max consecutive composed layers without global accuracy gain |
 
-Builder stops when **any** of: composed layers ≥
-`L_build`, `build_node_len` ≥ `V`, batch accuracy perfect, fewer than two
-parents, or no valid pair candidates. There is no separate patience parameter.
+Builder stops when **any** of: `layers_without_improvement` ≥
+`l_pat`, composed layers ≥ `L_build`, `build_node_len` ≥ `V`, batch accuracy
+perfect, fewer than two parents, or no valid pair candidates.
+
+After each composed layer, compare the global max of `accuracy_scores` to the
+running best; reset the patience counter on improvement, else increment it.
 
 ```rust
 fn derive_build_capacity(d: usize, k_p: usize, n_max: usize) -> (usize, usize, usize) {
@@ -181,10 +189,11 @@ Always `N_k` ≤ |reachable| ≤ `V`. Inference memory scales with `K_max` ×
 ## Goals
 
 - **Fixed resident memory** at model construction from
-  (`d`, `B`, `K_max`, `N_max`, `K_p`, `C`) — builder size derived from
-  `N_max` + `K_p`.
+  (`d`, `B`, `K_max`, `N_max`, `K_p`, `l_pat`, `C`) — builder size derived from
+  `N_max` + `K_p`; layer depth bounded at runtime by `l_pat` and at construction
+  by `L_build`.
 - **Zero heap allocation** after `new` on all paths.
-- **One new public parameter:** `max_expert_nodes`.
+- **Public build controls:** `max_expert_nodes` (memory) and `l_pat` (patience).
 - **Dense weights**, fixed expert slots, preallocated builder workspace of
   derived size (`V`, `P`, `K_p`).
 
@@ -198,6 +207,7 @@ Non-goals: SIMD/GPU; zero-copy Python input (separate plan).
 | `batch_size` | `B` | unchanged |
 | `n_features` / `source_feature_count` | `d` | unchanged |
 | `parent_top_k` | `K_p` | caps layer width, pair scratch, column cache, and output candidate pool |
+| `l_pat` | `l_pat` | consecutive composed layers without accuracy improvement before early stop (default 2) |
 | `n_classes` | `C` | classifier only |
 | **`max_expert_nodes`** | `N_max` | **new** |
 
@@ -266,33 +276,36 @@ expert-major).
 
 ## Builder changes (with simplified config)
 
-1. **Layer budget:** stop after derived `L_build`.
-2. **Width budget:** at most **`K_p`** nodes per layer (already implemented).
-3. **Pair scratch:** at most **`P`** counters per layer (already implemented).
-4. **Node budget:** stop before `build_node_len == V`.
-5. **Compact:** error if `n_nodes > N_max`.
-6. **Constant gate (done):** skip constant source columns, constant parent
+1. **Memory layer budget:** never exceed derived `L_build`.
+2. **Patience layer budget (done):** stop after `l_pat` consecutive layers with
+   no global accuracy improvement.
+3. **Width budget:** at most **`K_p`** nodes per layer (already implemented).
+4. **Pair scratch:** at most **`P`** counters per layer (already implemented).
+5. **Node budget:** stop before `build_node_len == V`.
+6. **Compact:** error if `n_nodes > N_max`.
+7. **Constant gate (done):** skip constant source columns, constant parent
    columns, and truth tables `0b0000` / `0b1111`. Unary literals (varying
    single source) remain valid.
-7. **Output (done):** top-`K_p` by association, then best accuracy among
+8. **Output (done):** top-`K_p` by association, then best accuracy among
    survivors.
-8. **Layer cap (done):** build until derived `L_build` via
+9. **Layer cap (done):** derive `L_build` via
    `FunctionBuildConfig::new` / `derive_build_capacity`.
-9. **Column cache (partially done):** single-layer `retain_only`; swap heap
-   `ColumnCache` for fixed `build_columns` in workspace.
-10. **Predict / eval:** replace `node_column` + `HashMap` with
+10. **Column cache (done):** flat `build_columns[2·K_p·B]` + ready flags in
+    workspace (replaces heap `ColumnCache`).
+11. **Predict / eval:** replace `node_column` + `HashMap` with
     `eval_scratch: [bool; N_max]`.
-11. Replace remaining allocating `Vec` paths (`graph.layers`, layer node lists)
-    with indexed workspace where they affect post-`new` growth.
+12. Replace remaining allocating `Vec` paths at end of `build_in_workspace`
+    (`nodes.to_vec()`, `layers.clone()`) where they affect post-`new` growth.
 
 ## Implementation phases
 
 ### Phase 0 — Config
 
-- Add **`max_expert_nodes` only** (Rust, Python, PyO3, paper § Notation,
-  benchmarks).
-- Add `derive_build_capacity(d, k_p, n_max)`; validate at `new`.
-- Enforce `L_build` and `V` in builder (replaces unbounded growth).
+- Add **`max_expert_nodes`** and **`l_pat`** (Rust, Python, PyO3, paper §
+  Notation, benchmarks).
+- Add `derive_build_capacity(d, k_p, n_max)`; validate at `new` (`l_pat > 0`,
+  `N_max < V`, etc.).
+- Enforce `L_build` and `V` in builder; wire `l_pat` patience in the composed-layer loop.
 
 ### Phase 1 — Dense weights + fixed expert slots (`N_max`)
 
@@ -309,8 +322,10 @@ expert-major).
 - [x] **Constant gate** — no constant sources, constant gates, or constant
   parents in pair eval.
 - [x] **Association-constrained output** — `select_output_top_k_by_association`.
-- [x] **Layer cap** — build until derived `L_build`
+- [x] **Layer cap** — derive `L_build`
   (`FunctionBuildConfig::new`, `derive_build_capacity`, `DEFAULT_MAX_EXPERT_NODES`).
+- [x] **`l_pat` patience** — early stop after consecutive non-improving layers
+  (`DEFAULT_L_PAT = 2`; paper benchmarks use `l_pat = 5`).
 - [x] Flat `build_columns[2·K_p·B]` + ready flags (drop `ColumnCache` heap).
 - [x] Fixed `build_nodes`, `build_assoc`, `build_accuracy`, layer index buffers.
 - [x] Wire `FunctionBuilder::build` to workspace instead of local `Vec`s.
@@ -332,12 +347,12 @@ expert-major).
 `P = K_p(K_p−1)/2`, `L_build = max(1, N_max − K_p.min(d))`,
 `V = K_p.min(d) + L_build·K_p + 1`.
 
-Transient allocations from `HashMap` predict and growing `Vec`s (graph layers,
-score vectors) are what Phase 4 still removes.
+Transient allocations from end-of-build `EphemeralGraph` materialization
+(`nodes.to_vec()`, `layers.clone()`) are what Phase 4 still removes.
 
 ## Paper updates
 
-Add one line to § Notation in `main.tex` (LaTeX):
+Add to § Notation in `main.tex` (LaTeX):
 
 ```tex
 \item[$N_{\max}$] Max compact nodes per stored expert
@@ -345,14 +360,17 @@ Add one line to § Notation in `main.tex` (LaTeX):
   Per-layer width $K_p$ (\texttt{parent\_top\_k}), pair scratch
   $P=\binom{K_p}{2}$, layer cap
   $L_{\mathrm{build}}=\max(1,N_{\max}-K_p\wedge d)$, graph pool
-  $V=(K_p\wedge d)+L_{\mathrm{build}}K_p+1$ derived at   construction.
+  $V=(K_p\wedge d)+L_{\mathrm{build}}K_p+1$ derived at construction.
+\item[$l_{\mathrm{pat}}$] Layer patience (\texttt{l\_pat}): stop after
+  $l_{\mathrm{pat}}$ consecutive composed layers with no in-sample accuracy
+  improvement (default $2$; paper benchmarks use $5$).
 ```
 
 ## Success criteria
 
-- [x] Exactly **one** new public cap: `max_expert_nodes`.
-- [x] `V`, `P`, `L_build` derived; no extra build caps in the public API.
-- [x] `N_max < V` validated at construction.
+- [x] Public caps: `max_expert_nodes` and `l_pat`.
+- [x] `V`, `P`, `L_build` derived; `l_pat` is the runtime early-stop control.
+- [x] `N_max < V` and `l_pat > 0` validated at construction.
 - [x] Column cache fixed at `O(K_p·B)`; pair scratch fixed at `P` (no heap growth).
 - [x] Predict / expert eval use preallocated scratch (no per-call `HashMap` / `Vec`).
 - [ ] Zero alloc after `new`; tests green.

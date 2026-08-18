@@ -86,12 +86,16 @@ impl FunctionBuilder {
 
         let batch_size_u8 = u8::try_from(config.batch_size)
             .expect("batch size validated to fit in u8");
-        let mut best_accuracy = best_layer_accuracy(
-            &workspace.layers[0],
-            &workspace.accuracy_scores[..workspace.node_len],
-        );
+        let mut best_accuracy = workspace.accuracy_scores[..workspace.node_len]
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let mut layers_without_improvement = 0usize;
 
-        while workspace.layers.len() - 1 < config.max_composed_layers {
+        while layers_without_improvement < config.l_pat
+            && workspace.layers.len() - 1 < config.max_composed_layers
+        {
             let parent_layer = workspace.layers.len() - 1;
             let parents = workspace.layers[parent_layer].clone();
             for parent in &parents {
@@ -152,7 +156,6 @@ impl FunctionBuilder {
                 workspace.accuracy_scores[id.0] = candidate.matches;
                 ensure_column(workspace, batch, id)?;
                 debug_assert!(!is_constant_column(workspace.column_cache.column(id)));
-                best_accuracy = best_accuracy.max(candidate.matches);
             }
 
             if graph_full {
@@ -171,6 +174,17 @@ impl FunctionBuilder {
                 .column_cache
                 .retain_only(&workspace.layers[new_layer]);
 
+            let new_best = workspace.accuracy_scores[..workspace.node_len]
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+            if new_best > best_accuracy {
+                best_accuracy = new_best;
+                layers_without_improvement = 0;
+            } else {
+                layers_without_improvement += 1;
+            }
             if best_accuracy == batch_size_u8 {
                 break;
             }
@@ -294,14 +308,6 @@ fn score_pairs_into_workspace(
     Ok(candidate_count)
 }
 
-fn best_layer_accuracy(layer: &[BuildNodeId], accuracy_scores: &[u8]) -> u8 {
-    layer
-        .iter()
-        .map(|id| accuracy_scores[id.0])
-        .max()
-        .unwrap_or(0)
-}
-
 fn parent_column<'a>(
     workspace: &'a BuildWorkspace,
     batch: SignBatch<'a>,
@@ -335,7 +341,7 @@ fn push_source_scores(
 mod tests {
     use super::{FunctionBuildConfig, FunctionBuilder, SignBatch};
     use crate::function_build_common::EphemeralNode;
-    use crate::function_build_common::DEFAULT_MAX_EXPERT_NODES;
+    use crate::function_build_common::{DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES};
 
     fn config(batch_size: usize, parent_top_k: usize, source_count: usize) -> FunctionBuildConfig {
         FunctionBuildConfig::new(
@@ -343,6 +349,7 @@ mod tests {
             parent_top_k,
             source_count,
             DEFAULT_MAX_EXPERT_NODES,
+            DEFAULT_L_PAT,
         )
     }
 

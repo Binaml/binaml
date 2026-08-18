@@ -54,6 +54,7 @@ impl BRegressor {
         parent_top_k: usize,
         max_functions: usize,
         max_expert_nodes: usize,
+        l_pat: usize,
     ) -> Result<Self, BRegressorError> {
         Self::new(
             source_feature_count,
@@ -65,6 +66,7 @@ impl BRegressor {
                 parent_top_k,
                 max_functions,
                 max_expert_nodes,
+                l_pat,
             },
         )
     }
@@ -114,7 +116,8 @@ mod tests {
     use super::BRegressor;
 
     fn model(batch_size: usize, max_functions: usize) -> BRegressor {
-        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 8, max_functions, 64).unwrap()
+        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 8, max_functions, 64, 2)
+            .unwrap()
     }
 
     fn weights(model: &mut BRegressor) -> &mut [f64] {

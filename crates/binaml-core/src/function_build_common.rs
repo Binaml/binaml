@@ -8,9 +8,11 @@ pub struct FunctionBuildConfig {
     pub max_composed_layers: usize,
     pub max_graph_nodes: usize,
     pub max_expert_nodes: usize,
+    pub l_pat: usize,
 }
 
 pub const DEFAULT_MAX_EXPERT_NODES: usize = 64;
+pub const DEFAULT_L_PAT: usize = 2;
 
 pub fn derive_build_capacity(d: usize, k_p: usize, n_max: usize) -> (usize, usize, usize) {
     let pairs = k_p.saturating_sub(1) * k_p / 2;
@@ -26,6 +28,7 @@ impl FunctionBuildConfig {
         parent_top_k: usize,
         source_count: usize,
         max_expert_nodes: usize,
+        l_pat: usize,
     ) -> Self {
         let (max_composed_layers, _, max_graph_nodes) =
             derive_build_capacity(source_count, parent_top_k, max_expert_nodes);
@@ -35,6 +38,7 @@ impl FunctionBuildConfig {
             max_composed_layers,
             max_graph_nodes,
             max_expert_nodes,
+            l_pat,
         }
     }
 }
@@ -87,6 +91,7 @@ pub(crate) fn validate_build_config(config: FunctionBuildConfig) -> Result<(), F
     if config.batch_size == 0
         || config.parent_top_k < 2
         || config.max_composed_layers == 0
+        || config.l_pat == 0
         || config.max_expert_nodes == 0
         || config.max_expert_nodes >= config.max_graph_nodes
         || config.batch_size > FeatureCounter::MAX_BATCH_SIZE

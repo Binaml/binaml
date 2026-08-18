@@ -1,5 +1,6 @@
 use crate::function_build_common::{
-    derive_build_capacity, BuildNodeId, EphemeralNode, FunctionBuildConfig, PairCandidate,
+    derive_build_capacity, BuildNodeId, DEFAULT_L_PAT, EphemeralNode, FunctionBuildConfig,
+    PairCandidate,
 };
 use crate::function_graph::CompactNode;
 use crate::FeatureCounter;
@@ -62,6 +63,7 @@ impl ModelCapacity {
             max_composed_layers: self.l_build,
             max_graph_nodes: self.graph_nodes,
             max_expert_nodes: self.max_expert_nodes,
+            l_pat: DEFAULT_L_PAT,
         }
     }
 }

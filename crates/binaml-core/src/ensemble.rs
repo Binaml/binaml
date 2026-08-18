@@ -13,6 +13,7 @@ pub(crate) struct EnsembleConfig {
     pub parent_top_k: usize,
     pub max_functions: usize,
     pub max_expert_nodes: usize,
+    pub l_pat: usize,
 }
 
 impl EnsembleConfig {
@@ -34,6 +35,7 @@ impl EnsembleConfig {
             || self.sgd_steps == 0
             || self.parent_top_k < 2
             || self.max_expert_nodes == 0
+            || self.l_pat == 0
             || capacity.validate().is_err()
         {
             return Err(EnsembleError::InvalidConfig);
@@ -47,6 +49,7 @@ impl EnsembleConfig {
             self.parent_top_k,
             source_feature_count,
             self.max_expert_nodes,
+            self.l_pat,
         )
     }
 

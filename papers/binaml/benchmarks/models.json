@@ -9,6 +9,7 @@
         "batch_size": 16,
         "sgd_steps": 20,
         "parent_top_k": 8,
+        "l_pat": 5,
         "max_functions": 64
       }
     },

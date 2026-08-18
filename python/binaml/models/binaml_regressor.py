@@ -24,6 +24,7 @@ class BRegressor(PredictUpdateState):
         parent_top_k: int = 8,
         max_functions: int = 64,
         max_expert_nodes: int = 64,
+        l_pat: int = 2,
     ) -> None:
         super().__init__()
         if (
@@ -41,6 +42,9 @@ class BRegressor(PredictUpdateState):
             or isinstance(max_functions, bool)
             or not isinstance(max_functions, int)
             or max_functions < 1
+            or isinstance(l_pat, bool)
+            or not isinstance(l_pat, int)
+            or l_pat < 1
         ):
             raise ValueError("invalid feature regressor configuration")
         self.n_features = n_features
@@ -55,6 +59,7 @@ class BRegressor(PredictUpdateState):
             parent_top_k,
             max_functions,
             max_expert_nodes,
+            l_pat,
         )
 
     def predict(self, features: np.ndarray) -> float:

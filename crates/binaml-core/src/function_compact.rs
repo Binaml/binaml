@@ -254,7 +254,7 @@ fn backward_reach(slots: &[Slot], aliases: &[Option<usize>], output: usize) -> H
 #[cfg(test)]
 mod tests {
     use super::compact;
-    use crate::function_build_common::DEFAULT_MAX_EXPERT_NODES;
+    use crate::function_build_common::{DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES};
     use crate::function_builder::{
         BuildNodeId, EphemeralGraph, EphemeralNode, FunctionBuildConfig, FunctionBuilder,
     };
@@ -266,7 +266,7 @@ mod tests {
         let second = [true, true, true, true];
         let columns = [&first[..], &second[..]];
         let signs = [false, true, false, true];
-        let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES);
+        let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
         let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
@@ -303,7 +303,7 @@ mod tests {
         let third = [true, false, true, false];
         let columns = [&first[..], &second[..], &third[..]];
         let signs = [false, true, true, false];
-        let config = FunctionBuildConfig::new(4, 3, 3, DEFAULT_MAX_EXPERT_NODES);
+        let config = FunctionBuildConfig::new(4, 3, 3, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
         let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
