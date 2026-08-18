@@ -1,7 +1,7 @@
-use crate::function_compact::CompactError;
+use crate::function_compact::{compact_with_limit_and_invert, CompactError};
+use crate::workspace::{EnsembleWorkspace, ModelCapacity, WorkspaceError};
 use crate::{
-    compact, BuildNodeId, EphemeralNode, FunctionBuildConfig, FunctionBuildError, FunctionBuilder,
-    FunctionGraph, SignBatch,
+    FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -10,36 +10,55 @@ pub(crate) struct EnsembleConfig {
     pub l2: f64,
     pub sgd_steps: usize,
     pub batch_size: usize,
-    pub max_layers_without_improvement: usize,
     pub parent_top_k: usize,
     pub max_functions: usize,
+    pub max_expert_nodes: usize,
 }
 
 impl EnsembleConfig {
     pub fn validate(&self, source_feature_count: usize) -> Result<(), EnsembleError> {
+        let capacity = ModelCapacity::new(
+            source_feature_count,
+            self.batch_size,
+            self.parent_top_k,
+            self.max_functions,
+            self.max_expert_nodes,
+            0,
+        );
         if source_feature_count == 0
             || self.max_functions == 0
-            || self.batch_size == 0
-            || self.batch_size > crate::FeatureCounter::MAX_BATCH_SIZE
             || !self.learning_rate.is_finite()
             || self.learning_rate <= 0.0
             || !self.l2.is_finite()
             || self.l2 < 0.0
             || self.sgd_steps == 0
-            || self.parent_top_k == 0
-            || self.max_layers_without_improvement == 0
+            || self.parent_top_k < 2
+            || self.max_expert_nodes == 0
+            || capacity.validate().is_err()
         {
             return Err(EnsembleError::InvalidConfig);
         }
         Ok(())
     }
 
-    fn build_config(&self) -> FunctionBuildConfig {
-        FunctionBuildConfig {
-            batch_size: self.batch_size,
-            parent_top_k: self.parent_top_k,
-            max_layers_without_improvement: self.max_layers_without_improvement,
-        }
+    fn build_config(&self, source_feature_count: usize) -> FunctionBuildConfig {
+        FunctionBuildConfig::new(
+            self.batch_size,
+            self.parent_top_k,
+            source_feature_count,
+            self.max_expert_nodes,
+        )
+    }
+
+    fn capacity(&self, source_feature_count: usize, n_classes: usize) -> ModelCapacity {
+        ModelCapacity::new(
+            source_feature_count,
+            self.batch_size,
+            self.parent_top_k,
+            self.max_functions,
+            self.max_expert_nodes,
+            n_classes,
+        )
     }
 }
 
@@ -60,8 +79,17 @@ impl From<FunctionBuildError> for EnsembleError {
 }
 
 impl From<CompactError> for EnsembleError {
-    fn from(_: CompactError) -> Self {
-        Self::Compact
+    fn from(error: CompactError) -> Self {
+        match error {
+            CompactError::ExpertTooLarge => Self::Compact,
+            CompactError::InvalidOutput => Self::Build,
+        }
+    }
+}
+
+impl From<WorkspaceError> for EnsembleError {
+    fn from(_: WorkspaceError) -> Self {
+        Self::InvalidConfig
     }
 }
 
@@ -77,21 +105,14 @@ pub(crate) trait EnsembleHead: std::fmt::Debug {
 }
 
 #[derive(Debug)]
-struct PendingStep {
-    features: Vec<bool>,
-    function_values: Vec<bool>,
-}
-
-#[derive(Debug)]
 pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
     pub config: EnsembleConfig,
     pub source_feature_count: usize,
     pub head: H,
     pub functions: Vec<FunctionGraph>,
-    pub feature_batch_features: Vec<Vec<bool>>,
-    pub feature_batch_signs: Vec<bool>,
     pub n_observed: usize,
-    pending: Option<PendingStep>,
+    pub(crate) workspace: EnsembleWorkspace,
+    pending: bool,
 }
 
 impl<H: EnsembleHead> BooleanEnsemble<H> {
@@ -99,17 +120,19 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         source_feature_count: usize,
         head: H,
         config: EnsembleConfig,
+        n_classes: usize,
     ) -> Result<Self, EnsembleError> {
         config.validate(source_feature_count)?;
+        let capacity = config.capacity(source_feature_count, n_classes);
+        let workspace = EnsembleWorkspace::new(capacity)?;
         Ok(Self {
             config,
             source_feature_count,
             head,
             functions: Vec::new(),
-            feature_batch_features: Vec::with_capacity(config.batch_size),
-            feature_batch_signs: Vec::with_capacity(config.batch_size),
             n_observed: 0,
-            pending: None,
+            workspace,
+            pending: false,
         })
     }
 
@@ -119,89 +142,109 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
             .ok_or(EnsembleError::InvalidInput)
     }
 
-    pub fn function_values(&self, features: &[bool]) -> Vec<bool> {
-        self.functions
-            .iter()
-            .map(|function| function.evaluate(features))
-            .collect()
+    fn function_count(&self) -> usize {
+        self.functions.len()
     }
 
-    pub fn begin_predict(&mut self, features: &[bool]) -> Result<Vec<bool>, EnsembleError> {
-        if self.pending.is_some() {
+    fn function_values(&mut self, features: &[bool]) -> &[bool] {
+        let count = self.function_count();
+        for index in 0..count {
+            self.workspace.function_values[index] = self.functions[index]
+                .evaluate_with_scratch(features, &mut self.workspace.eval_scratch);
+        }
+        &self.workspace.function_values[..count]
+    }
+
+    pub fn begin_predict(&mut self, features: &[bool]) -> Result<(), EnsembleError> {
+        if self.pending {
             return Err(EnsembleError::PendingPrediction);
         }
         self.validate_features(features)?;
-        let function_values = self.function_values(features);
-        self.pending = Some(PendingStep {
-            features: features.to_vec(),
-            function_values: function_values.clone(),
-        });
-        Ok(function_values)
+        self.workspace
+            .pending_features
+            .copy_from_slice(features);
+        let count = self.function_count();
+        for index in 0..count {
+            self.workspace.function_values[index] = self.functions[index]
+                .evaluate_with_scratch(features, &mut self.workspace.eval_scratch);
+        }
+        self.workspace.pending_function_values[..count]
+            .copy_from_slice(&self.workspace.function_values[..count]);
+        self.pending = true;
+        Ok(())
     }
 
     pub fn update(&mut self, target: H::Target) -> Result<(), EnsembleError> {
         self.head.validate_target(target)?;
-        let pending = self
-            .pending
-            .take()
-            .ok_or(EnsembleError::NoPendingPrediction)?;
+        if !self.pending {
+            return Err(EnsembleError::NoPendingPrediction);
+        }
+        self.pending = false;
         self.n_observed += 1;
 
-        let sign = self.head.batch_sign(target, &pending.function_values);
-        self.feature_batch_features.push(pending.features);
-        self.feature_batch_signs.push(sign);
+        let count = self.function_count();
+        let sign = self
+            .head
+            .batch_sign(target, &self.workspace.pending_function_values[..count]);
+        let batch_index = self.workspace.batch_len;
+        for feature in 0..self.source_feature_count {
+            self.workspace.batch_features[feature * self.config.batch_size + batch_index] =
+                self.workspace.pending_features[feature];
+        }
+        self.workspace.batch_signs[batch_index] = sign;
+        self.workspace.batch_len += 1;
 
         for _ in 0..self.config.sgd_steps {
             self.head.update(
                 target,
-                &pending.function_values,
+                &self.workspace.pending_function_values[..count],
                 self.config.learning_rate,
                 self.config.l2,
             );
         }
 
-        if self.feature_batch_features.len() == self.config.batch_size {
+        if self.workspace.batch_len == self.config.batch_size {
             self.finish_batch()?;
-            self.feature_batch_features.clear();
-            self.feature_batch_signs.clear();
+            self.workspace.batch_len = 0;
         }
         Ok(())
     }
 
     fn finish_batch(&mut self) -> Result<(), EnsembleError> {
-        let columns: Vec<Vec<bool>> = (0..self.source_feature_count)
-            .map(|index| {
-                self.feature_batch_features
-                    .iter()
-                    .map(|row| row[index])
-                    .collect()
-            })
-            .collect();
-        let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
-        let batch = SignBatch {
-            feature_columns: &column_refs,
-            signs: &self.feature_batch_signs,
+        let batch_size = self.config.batch_size;
+        let feature_count = self.source_feature_count;
+        let build_config = self.config.build_config(self.source_feature_count);
+        let model = {
+            let batch_features = &self.workspace.batch_features;
+            let mut column_refs = Vec::with_capacity(feature_count);
+            for feature in 0..feature_count {
+                let start = feature * batch_size;
+                column_refs.push(&batch_features[start..start + batch_size]);
+            }
+            let batch = SignBatch {
+                feature_columns: &column_refs,
+                signs: &self.workspace.batch_signs[..batch_size],
+            };
+            match FunctionBuilder::build_in_workspace(batch, build_config, &mut self.workspace.build)
+            {
+                Ok(model) => model,
+                Err(FunctionBuildError::InvalidBatch) => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
         };
-        let model = FunctionBuilder::build(batch, self.config.build_config())?;
-        let mut graph = model.graph;
-        let mut output = model.output;
-        if model.invert_output {
-            let id = BuildNodeId(graph.nodes.len());
-            graph.nodes.push(EphemeralNode::Composed {
-                first: output,
-                second: output,
-                truth_table: 0b0011,
-            });
-            output = id;
-        }
-        let graph = compact(graph, output)?;
-        self.functions.push(graph);
-        self.head.append_function();
-        if self.functions.len() > self.config.max_functions {
+        let compacted = compact_with_limit_and_invert(
+            model.graph,
+            model.output,
+            self.config.max_expert_nodes,
+            model.invert_output,
+        )?;
+        if self.functions.len() >= self.config.max_functions {
             let index = self.head.prune_index();
             self.functions.remove(index);
             self.head.remove_function(index);
         }
+        self.functions.push(compacted);
+        self.head.append_function();
         Ok(())
     }
 }
@@ -209,14 +252,16 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
 #[derive(Debug)]
 pub(crate) struct RegressionHead {
     pub intercept: f64,
-    pub weights: Vec<f64>,
+    pub weights: Box<[f64]>,
+    pub active: usize,
 }
 
 impl RegressionHead {
-    pub fn new() -> Self {
+    pub fn new(max_functions: usize) -> Self {
         Self {
             intercept: 0.0,
-            weights: Vec::new(),
+            weights: vec![0.0; max_functions].into_boxed_slice(),
+            active: 0,
         }
     }
 
@@ -224,7 +269,7 @@ impl RegressionHead {
         self.intercept
             + function_values
                 .iter()
-                .zip(&self.weights)
+                .zip(self.weights.iter().take(self.active))
                 .map(|(value, weight)| weight * f64::from(*value))
                 .sum::<f64>()
     }
@@ -249,26 +294,34 @@ impl EnsembleHead for RegressionHead {
         let prediction = self.predict(function_values);
         let error = target - prediction;
         let decay = 1.0 - rate * l2;
-        for weight in &mut self.weights {
+        for weight in self.weights.iter_mut().take(self.active) {
             *weight *= decay;
         }
         self.intercept += rate * error;
-        for (weight, value) in self.weights.iter_mut().zip(function_values) {
+        for (weight, value) in self.weights.iter_mut().take(self.active).zip(function_values) {
             *weight += rate * error * f64::from(*value);
         }
     }
 
     fn append_function(&mut self) {
-        self.weights.push(0.0);
+        if self.active < self.weights.len() {
+            self.weights[self.active] = 0.0;
+            self.active += 1;
+        }
     }
 
     fn remove_function(&mut self, index: usize) {
-        self.weights.remove(index);
+        for slot in index..self.active - 1 {
+            self.weights[slot] = self.weights[slot + 1];
+        }
+        self.weights[self.active - 1] = 0.0;
+        self.active -= 1;
     }
 
     fn prune_index(&self) -> usize {
         self.weights
             .iter()
+            .take(self.active)
             .enumerate()
             .min_by(|(left_index, left_weight), (right_index, right_weight)| {
                 left_weight
@@ -284,31 +337,69 @@ impl EnsembleHead for RegressionHead {
 #[derive(Debug)]
 pub(crate) struct ClassificationHead {
     pub n_classes: usize,
-    pub intercepts: Vec<f64>,
-    pub weights: Vec<Vec<f64>>,
+    pub intercepts: Box<[f64]>,
+    pub weights: Box<[f64]>,
+    pub active: usize,
+    pub max_functions: usize,
+    pub logits_scratch: Box<[f64]>,
+    pub probabilities_scratch: Box<[f64]>,
 }
 
 impl ClassificationHead {
-    pub fn new(n_classes: usize) -> Self {
+    pub fn new(n_classes: usize, max_functions: usize) -> Self {
         Self {
             n_classes,
-            intercepts: vec![0.0; n_classes],
-            weights: Vec::new(),
+            intercepts: vec![0.0; n_classes].into_boxed_slice(),
+            weights: vec![0.0; max_functions * n_classes].into_boxed_slice(),
+            active: 0,
+            max_functions,
+            logits_scratch: vec![0.0; n_classes].into_boxed_slice(),
+            probabilities_scratch: vec![0.0; n_classes].into_boxed_slice(),
         }
     }
 
-    pub fn predict(&self, function_values: &[bool]) -> usize {
-        argmax(&self.logits(function_values))
+    pub(crate) fn expert_weights(&self, function_index: usize) -> &[f64] {
+        let start = function_index * self.n_classes;
+        &self.weights[start..start + self.n_classes]
     }
 
-    pub fn logits(&self, function_values: &[bool]) -> Vec<f64> {
-        let mut logits = self.intercepts.clone();
-        for (class_weights, value) in self.weights.iter().zip(function_values) {
+    fn expert_weights_mut(&mut self, function_index: usize) -> &mut [f64] {
+        let start = function_index * self.n_classes;
+        let end = start + self.n_classes;
+        &mut self.weights[start..end]
+    }
+
+    pub fn logits_into(&self, function_values: &[bool], logits: &mut [f64]) {
+        logits.copy_from_slice(&self.intercepts);
+        for (function_index, value) in function_values.iter().enumerate() {
             let activation = f64::from(*value);
-            for (logit, weight) in logits.iter_mut().zip(class_weights) {
+            for (logit, weight) in logits.iter_mut().zip(self.expert_weights(function_index)) {
                 *logit += weight * activation;
             }
         }
+    }
+
+    pub fn predict_with_scratch(
+        &self,
+        function_values: &[bool],
+        logits: &mut [f64],
+    ) -> usize {
+        self.logits_into(function_values, logits);
+        argmax(logits)
+    }
+
+    fn batch_sign_with_scratch(
+        &self,
+        target: usize,
+        function_values: &[bool],
+        logits: &mut [f64],
+    ) -> bool {
+        self.predict_with_scratch(function_values, logits) != target
+    }
+
+    pub fn logits(&self, function_values: &[bool]) -> Vec<f64> {
+        let mut logits = vec![0.0; self.n_classes];
+        self.logits_into(function_values, &mut logits);
         logits
     }
 }
@@ -325,52 +416,83 @@ impl EnsembleHead for ClassificationHead {
     }
 
     fn batch_sign(&self, target: Self::Target, function_values: &[bool]) -> bool {
-        self.predict(function_values) != target
+        const MAX_CLASSES: usize = 64;
+        let mut logits = [0.0_f64; MAX_CLASSES];
+        assert!(self.n_classes <= MAX_CLASSES);
+        self.batch_sign_with_scratch(target, function_values, &mut logits[..self.n_classes])
     }
 
     fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f64, l2: f64) {
-        let logits = self.logits(function_values);
-        let probabilities = softmax(&logits);
+        self.logits_scratch.copy_from_slice(&self.intercepts);
+        for (function_index, value) in function_values.iter().enumerate() {
+            let activation = f64::from(*value);
+            let start = function_index * self.n_classes;
+            for class_index in 0..self.n_classes {
+                self.logits_scratch[class_index] +=
+                    self.weights[start + class_index] * activation;
+            }
+        }
+        softmax_into(&self.logits_scratch, &mut self.probabilities_scratch);
         let decay = 1.0 - rate * l2;
-        for class_weights in &mut self.weights {
-            for weight in class_weights {
+        const MAX_CLASSES: usize = 64;
+        let mut errors = [0.0_f64; MAX_CLASSES];
+        assert!(self.n_classes <= MAX_CLASSES);
+        for class_index in 0..self.n_classes {
+            errors[class_index] = self.probabilities_scratch[class_index]
+                - f64::from(class_index == target);
+        }
+        for function_index in 0..self.active {
+            for weight in self.expert_weights_mut(function_index) {
                 *weight *= decay;
             }
         }
         for (class_index, intercept) in self.intercepts.iter_mut().enumerate() {
-            let error = probabilities[class_index] - f64::from(class_index == target);
-            *intercept -= rate * error;
+            *intercept -= rate * errors[class_index];
         }
-        for (class_weights, value) in self.weights.iter_mut().zip(function_values) {
+        for (function_index, value) in function_values.iter().enumerate() {
             let activation = f64::from(*value);
-            for (class_index, weight) in class_weights.iter_mut().enumerate() {
-                let error = probabilities[class_index] - f64::from(class_index == target);
-                *weight -= rate * error * activation;
+            for (class_index, weight) in self
+                .expert_weights_mut(function_index)
+                .iter_mut()
+                .enumerate()
+            {
+                *weight -= rate * errors[class_index] * activation;
             }
         }
     }
 
     fn append_function(&mut self) {
-        self.weights.push(vec![0.0; self.n_classes]);
+        if self.active < self.max_functions {
+            self.expert_weights_mut(self.active).fill(0.0);
+            self.active += 1;
+        }
     }
 
     fn remove_function(&mut self, index: usize) {
-        self.weights.remove(index);
+        for slot in index..self.active - 1 {
+            let next = self.expert_weights(slot + 1).to_vec();
+            self.expert_weights_mut(slot).copy_from_slice(&next);
+        }
+        self.expert_weights_mut(self.active - 1).fill(0.0);
+        self.active -= 1;
     }
 
     fn prune_index(&self) -> usize {
-        self.weights
-            .iter()
-            .enumerate()
-            .min_by(|(left_index, left_weights), (right_index, right_weights)| {
-                left_weights
+        (0..self.active)
+            .min_by(|&left_index, &right_index| {
+                self.expert_weights(left_index)
                     .iter()
                     .map(|weight| weight.abs())
                     .sum::<f64>()
-                    .total_cmp(&right_weights.iter().map(|weight| weight.abs()).sum::<f64>())
-                    .then_with(|| left_index.cmp(right_index))
+                    .total_cmp(
+                        &self
+                            .expert_weights(right_index)
+                            .iter()
+                            .map(|weight| weight.abs())
+                            .sum::<f64>(),
+                    )
+                    .then_with(|| left_index.cmp(&right_index))
             })
-            .map(|(index, _)| index)
             .expect("non-empty ensemble")
     }
 }
@@ -384,20 +506,18 @@ fn argmax(values: &[f64]) -> usize {
         .unwrap_or(0)
 }
 
-fn softmax(logits: &[f64]) -> Vec<f64> {
+fn softmax_into(logits: &[f64], probabilities: &mut [f64]) {
     let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let mut probabilities: Vec<f64> = logits
-        .iter()
-        .map(|logit| (logit - max_logit).exp())
-        .collect();
+    for (probability, logit) in probabilities.iter_mut().zip(logits) {
+        *probability = (logit - max_logit).exp();
+    }
     let normalizer = probabilities.iter().sum::<f64>();
     if normalizer > 0.0 {
-        for probability in &mut probabilities {
+        for probability in probabilities {
             *probability /= normalizer;
         }
     } else {
         let uniform = 1.0 / logits.len() as f64;
         probabilities.fill(uniform);
     }
-    probabilities
 }

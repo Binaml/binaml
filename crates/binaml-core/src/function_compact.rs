@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactError {
     InvalidOutput,
+    ExpertTooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,37 @@ enum SimplifyResult {
 }
 
 pub fn compact(graph: EphemeralGraph, output: BuildNodeId) -> Result<FunctionGraph, CompactError> {
+    compact_with_limit(graph, output, usize::MAX)
+}
+
+pub fn compact_with_limit(
+    graph: EphemeralGraph,
+    output: BuildNodeId,
+    max_expert_nodes: usize,
+) -> Result<FunctionGraph, CompactError> {
+    let (source_indices, nodes, output) = compact_parts(graph, output, max_expert_nodes)?;
+    let mut function = FunctionGraph::empty(source_indices.len().max(1), nodes.len().max(1));
+    function.reset_from_parts(&source_indices, &nodes, output, false);
+    Ok(function)
+}
+
+pub fn compact_with_limit_and_invert(
+    graph: EphemeralGraph,
+    output: BuildNodeId,
+    max_expert_nodes: usize,
+    invert_output: bool,
+) -> Result<FunctionGraph, CompactError> {
+    let (source_indices, nodes, output) = compact_parts(graph, output, max_expert_nodes)?;
+    let mut function = FunctionGraph::empty(source_indices.len().max(1), nodes.len().max(1));
+    function.reset_from_parts(&source_indices, &nodes, output, invert_output);
+    Ok(function)
+}
+
+fn compact_parts(
+    graph: EphemeralGraph,
+    output: BuildNodeId,
+    max_expert_nodes: usize,
+) -> Result<(Vec<usize>, Vec<CompactNode>, usize), CompactError> {
     if output.0 >= graph.nodes.len() {
         return Err(CompactError::InvalidOutput);
     }
@@ -157,11 +189,11 @@ pub fn compact(graph: EphemeralGraph, output: BuildNodeId) -> Result<FunctionGra
 
     let output = *old_to_new.get(&output).ok_or(CompactError::InvalidOutput)?;
 
-    Ok(FunctionGraph {
-        source_indices,
-        nodes,
-        output,
-    })
+    if nodes.len() > max_expert_nodes {
+        return Err(CompactError::ExpertTooLarge);
+    }
+
+    Ok((source_indices, nodes, output))
 }
 
 fn resolve_id(index: usize, aliases: &[Option<usize>]) -> usize {
@@ -222,6 +254,7 @@ fn backward_reach(slots: &[Slot], aliases: &[Option<usize>], output: usize) -> H
 #[cfg(test)]
 mod tests {
     use super::compact;
+    use crate::function_build_common::DEFAULT_MAX_EXPERT_NODES;
     use crate::function_builder::{
         BuildNodeId, EphemeralGraph, EphemeralNode, FunctionBuildConfig, FunctionBuilder,
     };
@@ -233,11 +266,7 @@ mod tests {
         let second = [true, true, true, true];
         let columns = [&first[..], &second[..]];
         let signs = [false, true, false, true];
-        let config = FunctionBuildConfig {
-            batch_size: 4,
-            parent_top_k: 2,
-            max_layers_without_improvement: 1,
-        };
+        let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES);
         let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,
@@ -274,11 +303,7 @@ mod tests {
         let third = [true, false, true, false];
         let columns = [&first[..], &second[..], &third[..]];
         let signs = [false, true, true, false];
-        let config = FunctionBuildConfig {
-            batch_size: 4,
-            parent_top_k: 3,
-            max_layers_without_improvement: 2,
-        };
+        let config = FunctionBuildConfig::new(4, 3, 3, DEFAULT_MAX_EXPERT_NODES);
         let model = FunctionBuilder::build(
             SignBatch {
                 feature_columns: &columns,

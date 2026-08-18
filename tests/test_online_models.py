@@ -133,7 +133,6 @@ def test_b_regressor_learns_negated_literal_via_output_inversion() -> None:
         1,
         batch_size=8,
         parent_top_k=2,
-        max_layers_without_improvement=1,
         max_functions=4,
         sgd_steps=1,
     )

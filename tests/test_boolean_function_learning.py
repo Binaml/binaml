@@ -4,7 +4,9 @@ import sys
 import numpy as np
 from binaml._core import FunctionLearner
 from binaml.benchmarks.boolean_function_learning.batches import draw_split
-from binaml.benchmarks.boolean_function_learning.learners import build_function_builder
+from binaml.benchmarks.boolean_function_learning.learners import (
+    build_function_builder,
+)
 from binaml.benchmarks.boolean_function_learning.evaluate import association_score
 from binaml.benchmarks.scenario import expand_grid
 
@@ -26,7 +28,7 @@ def test_function_builder_rust_learner_on_synthetic_batch() -> None:
         dtype=np.uint8,
     )
     y = np.array([False, True, True, True])
-    learner = build_function_builder(parent_top_k=2, max_layers_without_improvement=1)
+    learner = build_function_builder(parent_top_k=2)
     predictions, score, elapsed = learner.fit_predict_with_details(x, y)
     assert predictions.shape == (4,)
     assert score >= 3
@@ -36,7 +38,7 @@ def test_function_builder_rust_learner_on_synthetic_batch() -> None:
 def test_function_builder_learns_negated_literal_target() -> None:
     x = np.array([[0], [1], [0], [1], [0], [1], [0], [1]], dtype=np.uint8)
     y = np.array([True, False, True, False, True, False, True, False])
-    learner = build_function_builder(parent_top_k=2, max_layers_without_improvement=1)
+    learner = build_function_builder(parent_top_k=2)
     predictions, score, elapsed = learner.fit_predict_with_details(x, y)
     assert np.array_equal(predictions, y)
     assert score == 8
@@ -47,7 +49,7 @@ def test_function_builder_predicts_on_holdout_after_fit() -> None:
     x_train = np.array([[0, 0], [1, 0], [0, 1], [1, 1]], dtype=np.uint8)
     y_train = np.array([False, True, True, True])
     x_test = np.array([[1, 1], [0, 0]], dtype=np.uint8)
-    learner = build_function_builder(parent_top_k=2, max_layers_without_improvement=1)
+    learner = build_function_builder(parent_top_k=2)
     learner.fit(x_train, y_train)
     predictions = learner.predict(x_test)
     assert np.array_equal(predictions, np.array([True, False]))
@@ -56,7 +58,7 @@ def test_function_builder_predicts_on_holdout_after_fit() -> None:
 def test_function_builder_learns_xor_target() -> None:
     x = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.uint8)
     y = np.array([False, True, True, False])
-    learner = build_function_builder(parent_top_k=2, max_layers_without_improvement=1)
+    learner = build_function_builder(parent_top_k=2)
     predictions, score, _elapsed = learner.fit_predict_with_details(x, y)
     assert np.array_equal(predictions, y)
     assert score == 4
@@ -127,7 +129,7 @@ def test_cli_smoke(tmp_path, monkeypatch) -> None:
                     "q_max": 0,
                 },
                 "learners": {
-                    "function_builder": {"parent_top_k": 4, "max_layers_without_improvement": 1},
+                    "function_builder": {"parent_top_k": 4},
                 },
             }
         ),

@@ -42,8 +42,9 @@ impl BClassifier {
         Ok(Self {
             ensemble: BooleanEnsemble::new(
                 source_feature_count,
-                ClassificationHead::new(n_classes),
+                ClassificationHead::new(n_classes, config.max_functions),
                 config,
+                n_classes,
             )?,
         })
     }
@@ -57,8 +58,8 @@ impl BClassifier {
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
-        max_layers_without_improvement: usize,
         max_functions: usize,
+        max_expert_nodes: usize,
     ) -> Result<Self, BClassifierError> {
         Self::new(
             source_feature_count,
@@ -68,9 +69,9 @@ impl BClassifier {
                 l2,
                 sgd_steps,
                 batch_size,
-                max_layers_without_improvement,
                 parent_top_k,
                 max_functions,
+                max_expert_nodes,
             },
         )
     }
@@ -92,16 +93,20 @@ impl BClassifier {
 
     #[must_use]
     pub fn weight(&self, function_index: usize, class_index: usize) -> Option<f64> {
-        self.ensemble
-            .head
-            .weights
-            .get(function_index)
-            .and_then(|class_weights| class_weights.get(class_index).copied())
+        if function_index >= self.ensemble.head.active || class_index >= self.ensemble.head.n_classes
+        {
+            return None;
+        }
+        Some(self.ensemble.head.expert_weights(function_index)[class_index])
     }
 
     pub fn predict(&mut self, features: &[bool]) -> Result<usize, BClassifierError> {
-        let function_values = self.ensemble.begin_predict(features)?;
-        Ok(self.ensemble.head.predict(&function_values))
+        self.ensemble.begin_predict(features)?;
+        let count = self.ensemble.functions.len();
+        Ok(self.ensemble.head.predict_with_scratch(
+            &self.ensemble.workspace.pending_function_values[..count],
+            &mut self.ensemble.workspace.logits,
+        ))
     }
 
     pub fn update(&mut self, target: usize) -> Result<(), BClassifierError> {
@@ -117,7 +122,7 @@ mod tests {
     use super::BClassifier;
 
     fn model(batch_size: usize, max_functions: usize) -> BClassifier {
-        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 2, 1, max_functions)
+        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 8, max_functions, 64)
             .unwrap()
     }
 

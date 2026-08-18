@@ -97,7 +97,7 @@ subject to data drift.  Binary features provide a task-agnostic representation
 and enable models optimized for memory, latency, and energy efficiency.  This
 paper specifies Binaml's online ensemble models, \texttt{BRegressor} for scalar
 regression and \texttt{BClassifier} for multiclass classification, as ensembles
-of batch-learned boolean functions with task-specific linear heads.  Both models adapt online rather than
+of batch-learned boolean experts with task-specific linear heads.  Both models adapt online rather than
 relying on a stationary train/serve assumption and learn compact compositional
 representations from residual feedback.  The models are environment-agnostic:
 they do not depend on how the stream is produced.  This paper specifies the
@@ -106,52 +106,67 @@ synthetic regression and classification streams.
 \end{abstract}
 
 \section{Notation}
+Symbols below are used consistently in this paper, in
+\texttt{crates/binaml-core}, and in \texttt{docs/plans/}.
 \begin{description}
-  \item[$d,x_t$] Input width and binary input.
+  \item[$d,x_t$] Input width and binary input
+  (\texttt{source\_feature\_count} / \texttt{n\_features}).
   \item[$y_t,\hat y_t$] Scalar regression target and prediction.
-  \item[$K,c_t,\hat c_t$] Number of classes, class label, and predicted class
-  (classification).
-  \item[$e_t,s_t$] Residual and residual-sign label.
-  \item[$b,w_k,\eta,\lambda$] Intercept, ensemble weight of function $k$,
-  learning rate, and $\ell_2$ decay.
-  \item[$f_k(x)$] Stored boolean function $k$ mapping $\{0,1\}^d$ to
-  $\{0,1\}$, stored as a compact boolean function.
+  \item[$C,c_t,\hat c_t$] Number of classes, class label, and predicted class
+  (\texttt{n\_classes}).
+  \item[$F,F_t$] Current expert count and expert count after batch
+  finalizations through time~$t$ (\texttt{function\_count()}).
+  \item[$e_t,s_t$] Residual and supervision label appended to the expert batch.
+  \item[$b,w_k,\eta,\lambda$] Intercept, ensemble weight of expert~$k$,
+  learning rate (\texttt{learning\_rate}), and $\ell_2$ decay (\texttt{l2}).
+  \item[$f_k(x)$] Boolean expert $k$ mapping $\{0,1\}^d$ to
+  $\{0,1\}$, stored as a compact \texttt{FunctionGraph}.
   \item[$T\in\{0,\ldots,15\}$] Four-bit truth table of an arity-2 composed
   node.
-  \item[$B,S,n,K,L_{\mathrm{pat}},K_{\max}$] Feature batch size, SGD steps per
-  observation, batch index, parent top-$K$ width, consecutive layers without
-  accuracy improvement before growth stops, and ensemble capacity.
+  \item[$B,S,n$] Expert batch size (\texttt{batch\_size}), SGD steps per
+  observation (\texttt{sgd\_steps}), and batch index.
+  \item[$K_p,L_{\mathrm{build}},K_{\max}$] Parent top-$K_p$ width
+  (\texttt{parent\_top\_k}), max composed layers per batch build (derived at
+  runtime from $d$, $K_p$, and \texttt{max\_expert\_nodes}), and ensemble capacity
+  (\texttt{max\_functions}).
+  \item[$N_{\max}$] Max compact nodes per stored expert
+  (\texttt{max\_expert\_nodes}): length of \texttt{FunctionGraph.nodes}.
+  Per-layer width $K_p$ (\texttt{parent\_top\_k}), pair scratch
+  $P=\binom{K_p}{2}$, layer cap
+  $L_{\mathrm{build}}=\max(1,N_{\max}-K_p\wedge d)$, graph pool
+  $V=(K_p\wedge d)+L_{\mathrm{build}}K_p+1$ derived at construction.
 \end{description}
 
 \section{Model}
-Both \texttt{BRegressor} and \texttt{BClassifier} share the same boolean
-function discovery pipeline: batch-local graph growth, in-sample output
-selection, compaction into \texttt{FunctionGraph} objects, and ensemble pruning
-at capacity $K_{\max}$.  They differ only in the linear head that maps stored
-function activations to predictions.
+Both \texttt{BRegressor} and \texttt{BClassifier} maintain an ensemble of
+boolean experts.  Expert structure evolves slowly through batch-local graph
+growth, in-sample output selection, and compaction into \texttt{FunctionGraph}
+objects; expert weights in the linear head adapt on every observation.  At
+capacity $K_{\max}$, ensemble pruning drops the weakest expert.  The two models
+differ only in the linear head that maps expert activations to predictions.
 
 \subsection{Regression head}
 At time $t$, the regressor receives $x_t\in\{0,1\}^d$ and later observes a
 finite scalar $y_t$.  If useful signal is sparse weighted boolean structure
 over bits, a linear head over learned boolean indicators is a direct hypothesis
-class: continuous amplitudes, discrete features, and an inspectable
+class: continuous amplitudes, discrete experts, and an inspectable
 composition.
-Let $K_t$ be the number of stored functions after batch finalizations through
+Let $F_t$ be the number of experts after batch finalizations through
 time $t$.  The prediction is
 \[
 \hat y_t
 =
 b
 +
-\sum_{k=1}^{K_t}
+\sum_{k=1}^{F_t}
 w_k\,f_k(x_t),
 \]
 where $b\in\mathbb R$, each $w_k\in\mathbb R$, and each
 $f_k(x_t)\in\{0,1\}$.
-Each $f_k$ is a compact boolean function built from one residual-sign batch.
-Feature learning consumes a binary supervision bit derived from the scalar
+Each $f_k$ is a compact boolean expert built from one supervision batch.
+Expert construction consumes a binary supervision bit derived from the scalar
 target.  With pre-update prediction $\hat y_t$, the residual is
-$e_t=y_t-\hat y_t$ and the sign appended to the current feature batch is
+$e_t=y_t-\hat y_t$ and the label appended to the current expert batch is
 \[
 s_t=\mathbf{1}\{e_t\geq 0\}.
 \]
@@ -172,22 +187,22 @@ Each observation performs $S$ such steps on the same activation row.
 
 \subsection{Classification head}
 The classifier receives $x_t\in\{0,1\}^d$ and later observes a class label
-$y_t\in\{0,\ldots,K-1\}$.  Let $K_t$ be the number of stored functions after
+$y_t\in\{0,\ldots,C-1\}$.  Let $F_t$ be the number of experts after
 batch finalizations through time $t$.  For each class $c$, logits are
 \[
 \ell_{t,c}
 =
 b_c
 +
-\sum_{k=1}^{K_t}
+\sum_{k=1}^{F_t}
 w_{k,c}\,f_k(x_t),
 \]
 where $b_c\in\mathbb R$ and each $w_{k,c}\in\mathbb R$.  The predicted class
 is $\hat c_t=\operatorname*{argmax}_c \ell_{t,c}$, with ties broken toward the
 smallest index.
-Feature learning consumes a binary supervision bit derived from the class label.
-With pre-update prediction $\hat c_t$, the sign appended to the current
-feature batch is the misclassification indicator
+Expert construction consumes a binary supervision bit derived from the class label.
+With pre-update prediction $\hat c_t$, the label appended to the current
+expert batch is the misclassification indicator
 \[
 s_t=\mathbf{1}\{\hat c_t\neq y_t\}.
 \]
@@ -208,24 +223,29 @@ w_{k,c} &\leftarrow w_{k,c}-\eta\,\delta_{t,c}\,f_k(x_t).
 \end{align*}
 Each observation performs $S$ such steps on the same activation row.
 
-\section{Building stored functions}
-Composition starts from the most basic nontrivial boolean learning unit:
-two-input tables.  Combining them yields richer features without beginning
-from high-arity search.  A composed node combines two parent activations using
-a four-bit truth table $T\in\{0,\ldots,15\}$.
+\section{Building experts}
+Binaml builds and maintains a collection of boolean experts.  Each expert is a
+compact boolean function over input bits; the ensemble grows one expert per
+filled batch while weights $w_k$ update on every observation.  Expert
+structure therefore evolves slowly, on batch boundaries, while the linear head
+tracks the task quickly.  Composition starts from the most basic nontrivial
+boolean learning unit: two-input tables.  Combining them yields richer experts
+without beginning from high-arity search.  A composed node combines two parent
+activations using a four-bit truth table $T\in\{0,\ldots,15\}$.
 
-\subsection{Feature representation and batch learning}
-Each feature batch grows an ephemeral wide DAG: layer zero holds the $d$ source
-bits; at each subsequent layer the builder forms every distinct pair among the
-top-$K$ parent nodes by descending $|\text{assoc}|$, learns a truth table on the
-current batch, and appends the resulting node.  Growth stops after $L_{\mathrm{pat}}$
-consecutive composed layers fail to improve the best in-sample accuracy, when
-fewer than two parents remain, or once accuracy is perfect on $\mathcal B_n$.
-When the batch fills, the builder selects one output node by descending
-in-sample accuracy, then depth, then node id, inverting the output bit when the
-inverted node is more accurate on $\mathcal B_n$.  The subgraph is compacted
+\subsection{Expert representation and batch learning}
+Each expert batch grows an ephemeral narrow DAG: layer zero holds up to $K_p$
+non-constant source bits; at each subsequent layer the builder forms every
+distinct pair among the current layer's parents, learns a truth table on the
+current batch, and keeps the top-$K_p$ candidates by descending $|\text{assoc}|$.
+Growth stops after $L_{\mathrm{build}}$ composed layers, when fewer than two
+parents remain, when no valid pair survives constant filtering, or once
+accuracy is perfect on $\mathcal B_n$.  When the batch fills, the builder
+selects one output node from the top-$K_p$ nodes by $|\text{assoc}|$, then by
+descending in-sample accuracy, inverting the output bit when the inverted node
+is more accurate on $\mathcal B_n$.  The subgraph is compacted
 into a \texttt{FunctionGraph} and appended to the ensemble with weight zero.  If the
-ensemble exceeds capacity $K_{\max}$, the function with smallest
+ensemble exceeds capacity $K_{\max}$, the expert with smallest
 $|w_k|$ is removed, breaking ties toward the oldest index.  There is no
 hold-out batch and no shared candidate queue across batches.
 
@@ -235,31 +255,12 @@ topological order.  Each node is either a source coordinate, a constant, or a
 composed operation referencing two already evaluated positions and one four-bit
 truth table.  One forward pass evaluates $f_k(x)$ for prediction and SGD.
 The eight \texttt{u8} counters used to learn a table cover every
-$(u,v,s)\in\{0,1\}^3$ combination, which limits the feature batch size to
+$(u,v,s)\in\{0,1\}^3$ combination, which limits the expert batch size to
 $B\leq255$.
 
-\begin{center}
-\scriptsize
-\begin{tabular}{@{}p{0.20\textwidth}p{0.47\textwidth}p{0.25\textwidth}@{}}
-\hline
-\textbf{Type} & \textbf{Fields or representation} & \textbf{Role} \\
-\hline
-\texttt{FunctionBuildConfig} & \texttt{\{batch\_size, parent\_top\_k, max\_layers\_without\_improvement\}} & batch-local graph growth limits \\
-\texttt{FunctionBuilder} & stateless builder & grows ephemeral DAG from one \texttt{SignBatch} \\
-\texttt{FunctionGraph} & sources, compact nodes, output index & immutable stored function \\
-\texttt{CompactNode} & \texttt{Source}, \texttt{Constant}, or \texttt{Composed\{first, second, truth\_table\}} & one evaluation step \\
-\texttt{BRegressor} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<f64>}, intercept, batch buffers, count & online regression ensemble state \\
-\texttt{BClassifier} & \texttt{functions: Vec<FunctionGraph>}, \texttt{weights: Vec<Vec<f64>>}, intercept vector, batch buffers, count & online classification ensemble state \\
-\hline
-\end{tabular}
-\end{center}
-
-\subsection{Residual-sign supervision and batching}
-Feature learning targets binary supervision bits, not the task target
-directly.  Each head maps its target to $s_t\in\{0,1\}$ as above; the builder
-treats $s_t$ as a binary label while the linear head absorbs magnitude or
-class structure.  Exact truth-table counting needs a bounded window; batching
-amortizes graph growth.  Batch $n$ is
+\subsection{Supervision and batching}
+Exact truth-table counting needs a bounded window; batching amortizes graph
+growth.  Batch $n$ is
 \[
 \mathcal B_n
 =
@@ -269,10 +270,10 @@ amortizes graph growth.  Batch $n$ is
 where $I_n$ is the contiguous block of $B$ observations since the previous
 structural update.  Processing $\mathcal B_n$ grows an ephemeral graph, selects
 one output by in-sample accuracy, compacts it, appends $(f,w=0)$ to the
-ensemble, and prunes to $K_{\max}$ if needed.  There is no hold-out batch.
+ensemble, and prunes to $K_{\max}$ if needed.
 
 \paragraph{Association score.}
-For a boolean stream $z_{1:B}$ and residual signs $s_{1:B}$, let
+For a boolean batch column $z_{1:B}$ and supervision labels $s_{1:B}$, let
 $N=B$, $N_x=\sum_i z_i$, $N_y=\sum_i s_i$, and
 $N_{xy}=\sum_i z_i s_i$.  Define
 \[
@@ -280,15 +281,15 @@ $N_{xy}=\sum_i z_i s_i$.  Define
 \]
 Parent nodes are ranked by $|\text{assoc}(z,s)|$, breaking ties by node id.
 Sources use their coordinate columns; composed nodes use their evaluated
-bitstreams.  Negation at layer zero is not materialized as separate nodes:
+batch columns.  Negation at layer zero is not materialized as separate nodes:
 anti-correlated sources rank highly on $|\text{assoc}|$, and output polarity
 flip handles $\neg x_i$ when it improves in-sample accuracy.
 
 \subsection{Truth-table learning}
-Given two parent bitstreams $u_{1:B}$, $v_{1:B}$ and residual signs
+Given two parent batch columns $u_{1:B}$, $v_{1:B}$ and supervision labels
 $s_{1:B}$, the learner returns the Hamming-error-minimizing four-bit table.
 Its state is a fixed array of eight \texttt{u8} counters, one for each
-combination of the two parent values and residual sign.  The learned result is
+combination of the two parent values and supervision label.  The learned result is
 a four-bit truth table represented by one \texttt{u8}.  The counters record
 the frequencies needed to select each table output by majority, with ties
 resolving to zero.  As one counter may receive every observation, the
@@ -296,46 +297,128 @@ resolving to zero.  As one counter may receive every observation, the
 
 \subsection{Batch graph growth}
 Starting from layer zero, the builder repeatedly appends composed layers until
-growth stops:
+$L_{\mathrm{build}}$ layers exist or a structural stop triggers:
 \begin{enumerate}
-  \item Let $L_{\mathrm{pat}}$ be the configured patience: the number of
-  consecutive composed layers allowed without improving the best in-sample
-  accuracy seen so far.
-  \item While fewer than $L_{\mathrm{pat}}$ consecutive layers have failed to
-  improve accuracy, fewer than two parent nodes remain in the current layer,
-  and accuracy is not yet perfect on $\mathcal B_n$:
+  \item Let $L_{\mathrm{build}}=\max(1,N_{\mathrm{cap}}-(K_p\wedge d))$, where
+  $N_{\mathrm{cap}}$ is the fixed expert-node cap used to size batch-build
+  workspace (64 in the current implementation).
+  \item While the composed-layer count is below $L_{\mathrm{build}}$, at least
+  two non-constant parents remain, at least one valid pair survives constant
+  filtering, and accuracy is not yet perfect on $\mathcal B_n$:
   \begin{enumerate}
-  \item Let $P_{\ell-1}$ be the top-$K$ nodes in layer $\ell-1$ by
-  $|\text{assoc}|$, breaking ties by node id.
+  \item Let $P_{\ell-1}$ be the nodes in layer $\ell-1$ (already capped at
+  $K_p$).
   \item Form every distinct pair in $P_{\ell-1}$.
-  \item For each pair, learn a truth table on $\mathcal B_n$ and append the
-  resulting composed node to layer $\ell$.
-  \item If the best in-sample accuracy across all nodes did not increase, count
-  one layer without improvement; otherwise reset that counter to zero.
+  \item For each pair, learn a truth table on $\mathcal B_n$, discard constant
+  tables and constant parents, and rank survivors by $|\text{assoc}|$.
+  \item Keep the top-$K_p$ composed nodes as layer $\ell$.
   \end{enumerate}
 \end{enumerate}
-After growth stops, the builder selects the output node by descending in-sample
-accuracy, then depth, then id, inverting the output when that improves accuracy
-on $\mathcal B_n$.
+After growth stops, the builder selects the output node from the top-$K_p$
+surviving nodes by $|\text{assoc}|$, then by descending in-sample accuracy,
+inverting the output when that improves accuracy on $\mathcal B_n$.
 
 \subsection{Ensemble pruning}
-When appending a new function would exceed $K_{\max}$, remove the stored index
+When appending a new expert would exceed $K_{\max}$, remove the stored index
 with smallest $|w_k|$, breaking ties toward the oldest index.  Zero-weight
 experts can therefore rotate at capacity even when still structurally useful on
 past batches.
 
+\section{Runtime data structures and memory}
+At runtime the models keep a small persistent state and allocate larger
+ephemeral structures only during \texttt{predict}, \texttt{update}, or expert
+batch construction.  Field names below follow \texttt{crates/binaml-core}; see
+§ Notation for the mapping to symbols.  Sizes assume a 64-bit target
+(\texttt{usize} and \texttt{f64} are 8~bytes; \texttt{bool} is 1~byte).  Let
+$F$ be the current expert count ($F\leq K_{\max}$), $\bar N$ the average
+compact node count per expert, and $\bar S$ the average source count per expert
+($\bar S\leq d$).
+
+\paragraph{Persistent model state.}
+\texttt{BRegressor} and \texttt{BClassifier} each wrap one
+\texttt{BooleanEnsemble} with a task-specific head.  The ensemble holds
+hyperparameters (\texttt{EnsembleConfig}), the expert list
+(\texttt{Vec<FunctionGraph>}), partial expert-batch buffers, an observation
+counter, and optional \texttt{PendingStep} state between \texttt{predict} and
+\texttt{update}.  Each \texttt{FunctionGraph} stores source remapping,
+topologically ordered \texttt{CompactNode} records, and an output index; it is
+immutable after compaction and evaluated by a single forward pass over a
+scratch vector of length $N_k$.  \texttt{CompactNode} is either a source
+coordinate, a constant bit, or a composed gate referencing two prior positions
+and one four-bit truth table (\texttt{u8}).
+
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{0.17\textwidth}p{0.34\textwidth}p{0.14\textwidth}p{0.27\textwidth}@{}}
+\hline
+\textbf{Type} & \textbf{Fields} & \textbf{Size} & \textbf{Role} \\
+\hline
+\texttt{EnsembleConfig} & $\eta$, $\lambda$, $S$, $B$, $K_p$, $K_{\max}$ & 48~B & fixed hyperparameters \\
+\texttt{RegressionHead} & intercept, \texttt{weights: Vec<f64>} & $8+8F$~B & linear head for \texttt{BRegressor} \\
+\texttt{ClassificationHead} & $C$, \texttt{intercepts}, \texttt{weights: Vec<Vec<f64>>} & $8+8C+8FC$~B & multiclass linear head \\
+\texttt{FunctionGraph} & \texttt{source\_indices}, \texttt{nodes}, \texttt{output} & $56+8\bar S+24\bar N$~B per expert & one boolean expert $f_k$ \\
+\texttt{CompactNode} & \texttt{Source}, \texttt{Constant}, or \texttt{Composed\{first, second, truth\_table\}} & 16--24~B per node & one DAG evaluation step \\
+\texttt{BooleanEnsemble} & config, head, \texttt{functions}, batch buffers, \texttt{pending} & see below & shared online engine \\
+\texttt{PendingStep} & \texttt{features}, \texttt{function\_values} & $d+F$~B & caches $(x,f(x))$ between \texttt{predict} and \texttt{update} \\
+\hline
+\end{tabular}
+\end{center}
+
+Partial expert-batch buffers retain up to $B$ input rows
+(\texttt{feature\_batch\_features}, $Bd$~B) and supervision labels
+(\texttt{feature\_batch\_signs}, $B$~B) between batch finalizations; capacity
+is pre-allocated at construction.
+
+\paragraph{Ephemeral and batch-build state.}
+\texttt{FunctionBuilder} is stateless; each batch fill constructs an
+\texttt{EphemeralGraph} of \texttt{EphemeralNode} candidates, association and
+accuracy hash maps, memoized batch columns, and one \texttt{FeatureCounter}
+(8~B, eight \texttt{u8} slots) per gate pair.  A borrowed \texttt{SignBatch}
+view exposes column-major input bits and labels without copying.  Compaction
+produces one persistent \texttt{FunctionGraph}, which is appended with weight
+zero.  During \texttt{predict}, each expert evaluation allocates a scratch
+vector of length $N_k$; the classifier also allocates a length-$C$ logit vector.
+During \texttt{update}, the classifier allocates logits and softmax
+probabilities once per call; regression head updates are in-place.
+
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{0.17\textwidth}p{0.34\textwidth}p{0.14\textwidth}p{0.27\textwidth}@{}}
+\hline
+\textbf{Type} & \textbf{Fields} & \textbf{Size} & \textbf{Lifetime} \\
+\hline
+\texttt{FunctionBuildConfig} & $B$, $K_p$, $L_{\mathrm{build}}$ & 24~B & one batch build \\
+\texttt{SignBatch} & \texttt{feature\_columns}, \texttt{signs} & borrowed & one batch build \\
+\texttt{EphemeralGraph} & \texttt{nodes}, \texttt{layers} & $O(V)$ nodes & one batch build \\
+\texttt{FeatureCounter} & \texttt{counts: [u8; 8]} & 8~B & one gate learn \\
+\texttt{FunctionBuilder} & (none) & 0~B & stateless entry point \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Memory scaling.}
+Ignoring vector headers, persistent heap for \texttt{BRegressor} scales as
+$8F + F(8\bar S + 24\bar N) + Bd + B + d + F$~bytes at a full partial batch
+and an outstanding \texttt{PendingStep}; \texttt{BClassifier} adds
+$8C(F+1)$~bytes for intercepts and the expert--class weight matrix.  Structural
+work peaks once every $B$ updates; per-observation overhead is
+$O(F\bar N + d + C)$~bytes.  Expert graphs dominate at capacity when
+$24\bar N \gg 8$ and $\bar N$ grows with batch-build depth.
+
 \section{Online head updates}
-Function identity is discrete; head parameters are continuous, so the two are
+Expert identity is discrete; head parameters are continuous, so the two are
 updated separately.  For each observation, \texttt{predict} evaluates the
-current stored functions once; \texttt{update} then computes the head-specific
-supervision bit $s_t$, appends $(x_t,s_t)$ to the current feature batch, and
+current experts once; \texttt{update} then computes the head-specific
+supervision bit $s_t$, appends $(x_t,s_t)$ to the current expert batch, and
 performs $S$ single-sample gradient steps on that activation row using the
-task-specific rules above.  In both models the newly appended function at a
+task-specific rules above.  In both models the newly appended expert at a
 batch boundary is excluded from SGD on the batch-fill step because it is added
 only after those updates.  There is no gradient through boolean structure: SGD
 tracks task loss at the sample level, while structure search runs when enough
 supervision bits have accumulated.  After every $B$ new observations, the
-batch is consumed to grow, select, compact, and append one function, then
+batch is consumed to grow, select, compact, and append one expert, then
 cleared.
 
 \section{Online learning procedure}
@@ -343,31 +426,31 @@ cleared.
 \begin{description}
   \item[\textbf{Linear}] Learning rate $\eta$, decay $\lambda$, and $S$ SGD
   steps per observation.
-  \item[\textbf{Batch structure}] Feature batch size $B$, parent top-$K$ width
-  $K$, layer growth patience $L_{\mathrm{pat}}$, and ensemble capacity $K_{\max}$.
+  \item[\textbf{Batch structure}] Expert batch size $B$, parent top-$K_p$ width
+  $K_p$, derived composed-layer cap $L_{\mathrm{build}}$, and ensemble capacity $K_{\max}$.
 \end{description}
 
 \noindent\textbf{Initialize:} empty ensemble, $b\leftarrow 0$, and empty
-feature-batch buffers.
+expert-batch buffers.
 
 \noindent\textbf{For} each observation $(x_t,y_t)$:
 \begin{enumerate}
   \item Validate the input width and task target.
-  \item Evaluate stored $f_k(x_t)$ and form the task prediction
+  \item Evaluate each expert $f_k(x_t)$ and form the task prediction
   ($\hat y_t$ or $\hat c_t$).
   \item Compute the head-specific supervision bit $s_t$ and append
-  $(x_t,s_t)$ to the current feature batch.
+  $(x_t,s_t)$ to the current expert batch.
   \item Apply $S$ single-sample head updates using the current activation row.
   \item After $B$ accumulated observations, grow a graph on the batch, select and
   compact one output, append it with weight zero, prune to $K_{\max}$ if needed,
-  and clear the feature batch.
+  and clear the expert batch.
 \end{enumerate}
 
 \paragraph{Cost.}
-Prediction and activation evaluation are linear in the number of stored
-functions and their node counts.  Each linear step costs one function count.
-Structural work occurs once per feature batch: graph growth scans selected
-parent pairs over $B$ rows, then compaction produces one stored function.
+Prediction and activation evaluation are linear in the number of experts
+and their node counts.  Each linear step costs one expert evaluation.
+Structural work occurs once per expert batch: graph growth scans selected
+parent pairs over $B$ rows, then compaction produces one expert.
 
 \section{API and integration boundaries}
 The \texttt{binaml.models} package owns the online models and has no
@@ -377,7 +460,7 @@ data comes from and how it was produced.  The public surfaces are
 \texttt{predict(features)} and \texttt{update(target)} for binary
 feature vectors of width $d$.  The prediction call retains pairing state;
 \texttt{update} must follow a preceding \texttt{predict} and applies the
-revealed target to that stored step.  Feature learning
+revealed target to that stored step.  Expert construction
 is internal to \texttt{update} once a batch fills.  Evaluation packages
 compose models with environments through predict-then-update prequential
 evaluation.  Named benchmarks only compose these independent components.
@@ -387,7 +470,7 @@ For each emitted sample, an evaluator first records the model prediction, then
 exposes the target through \texttt{update}.  Regression benchmarks compute
 mean squared error from the recorded pre-update predictions; classification
 benchmarks compute accuracy from the recorded pre-update class predictions.
-Structure updates occur only after a full feature batch fills inside
+Structure updates occur only after a full expert batch fills inside
 \texttt{update}; residual signs are measured with the current head parameters
 before the corresponding updates.
 Hyperparameters, implementation version, and the online protocol are required
@@ -405,9 +488,8 @@ function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
-$\eta=3\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$, feature batch size
-$B=16$, twenty single-sample SGD steps, parent top-$K=8$, layer growth patience
-$L_{\mathrm{pat}}=2$, and ensemble capacity $K_{\max}=64$.  Each stored function
+$\eta=3\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$, expert batch size
+$B=16$, twenty single-sample SGD steps, parent top-$K_p=8$, and ensemble capacity $K_{\max}=64$.  Each expert
 enters the linear head as $f_k(x)\in\{0,1\}$.  The linear baseline is a
 JAX replay-batch implementation using learning rate $0.03$, the same
 decay, replay size 32, and step count, with uncentered binary inputs.  The MLP
@@ -441,7 +523,7 @@ intercepts.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/default\_multiclass.json} and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
 learning rate $\eta=1.2\times10^{-1}$, $\ell_2$ decay $5\times10^{-4}$,
-feature batch size $B=12$, thirty single-sample SGD steps, and the same
+expert batch size $B=12$, thirty single-sample SGD steps, and the same
 structural limits as \texttt{BRegressor}; linear and MLP classifier baselines
 mirror their regression counterparts with softmax cross-entropy.  Reported
 comparisons use prequential accuracy over the same seed set after optional
@@ -467,7 +549,7 @@ MLP SGD (JAX) & $0.645\pm0.041$ & $1.432\pm0.141$ \\
 
 \section{Limitations and scope}
 This document specifies the ensemble models used by Binaml.  It does not
-claim optimality of residual-sign learning or in-sample function selection.
+claim optimality of residual-sign learning or in-sample expert selection.
 Ensemble churn at capacity can drop zero-weight experts that remain useful on
 past batches; in-sample output selection trades hold-out promotion for simpler
 batch boundaries.  The reported regression comparison is limited to the

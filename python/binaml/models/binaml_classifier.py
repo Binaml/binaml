@@ -23,8 +23,8 @@ class BClassifier(PredictUpdateState):
         batch_size: int = 12,
         sgd_steps: int = 30,
         parent_top_k: int = 8,
-        max_layers_without_improvement: int = 2,
         max_functions: int = 96,
+        max_expert_nodes: int = 64,
     ) -> None:
         super().__init__()
         if (
@@ -59,8 +59,8 @@ class BClassifier(PredictUpdateState):
             batch_size,
             sgd_steps,
             parent_top_k,
-            max_layers_without_improvement,
             max_functions,
+            max_expert_nodes,
         )
 
     def predict(self, features: np.ndarray) -> int:

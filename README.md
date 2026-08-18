@@ -65,7 +65,7 @@ use binaml_core::{BRegressor, BRegressorError};
 
 fn main() -> Result<(), BRegressorError> {
     let mut model = BRegressor::with_hyperparameters(
-        2, 5e-3, 1e-4, 16, 5, 8, 3, 64,
+        2, 5e-3, 1e-4, 16, 5, 8, 64,
     )?;
 
     for (features, target) in [([false, true], 1.0), ([true, false], 0.0)] {

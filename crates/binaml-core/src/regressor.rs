@@ -1,5 +1,4 @@
 use crate::ensemble::{BooleanEnsemble, EnsembleConfig, EnsembleError, RegressionHead};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BRegressorError {
     InvalidConfig,
@@ -36,7 +35,12 @@ impl BRegressor {
         config: EnsembleConfig,
     ) -> Result<Self, BRegressorError> {
         Ok(Self {
-            ensemble: BooleanEnsemble::new(source_feature_count, RegressionHead::new(), config)?,
+            ensemble: BooleanEnsemble::new(
+                source_feature_count,
+                RegressionHead::new(config.max_functions),
+                config,
+                0,
+            )?,
         })
     }
 
@@ -48,8 +52,8 @@ impl BRegressor {
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
-        max_layers_without_improvement: usize,
         max_functions: usize,
+        max_expert_nodes: usize,
     ) -> Result<Self, BRegressorError> {
         Self::new(
             source_feature_count,
@@ -58,9 +62,9 @@ impl BRegressor {
                 l2,
                 sgd_steps,
                 batch_size,
-                max_layers_without_improvement,
                 parent_top_k,
                 max_functions,
+                max_expert_nodes,
             },
         )
     }
@@ -82,12 +86,19 @@ impl BRegressor {
 
     #[must_use]
     pub fn weight(&self, index: usize) -> Option<f64> {
-        self.ensemble.head.weights.get(index).copied()
+        if index >= self.ensemble.head.active {
+            return None;
+        }
+        Some(self.ensemble.head.weights[index])
     }
 
     pub fn predict(&mut self, features: &[bool]) -> Result<f64, BRegressorError> {
-        let function_values = self.ensemble.begin_predict(features)?;
-        Ok(self.ensemble.head.predict(&function_values))
+        self.ensemble.begin_predict(features)?;
+        let count = self.ensemble.functions.len();
+        Ok(self
+            .ensemble
+            .head
+            .predict(&self.ensemble.workspace.pending_function_values[..count]))
     }
 
     pub fn update(&mut self, target: f64) -> Result<(), BRegressorError> {
@@ -103,11 +114,11 @@ mod tests {
     use super::BRegressor;
 
     fn model(batch_size: usize, max_functions: usize) -> BRegressor {
-        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 2, 1, max_functions).unwrap()
+        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 8, max_functions, 64).unwrap()
     }
 
-    fn weights(model: &mut BRegressor) -> &mut Vec<f64> {
-        &mut model.ensemble.head.weights
+    fn weights(model: &mut BRegressor) -> &mut [f64] {
+        &mut model.ensemble.head.weights[..model.ensemble.head.active]
     }
 
     fn step(model: &mut BRegressor, features: &[bool], target: f64) {
@@ -150,7 +161,7 @@ mod tests {
         let mut model = model(1, 2);
         step(&mut model, &[false, true], 1.0);
         step(&mut model, &[true, false], -1.0);
-        *weights(&mut model) = vec![0.0, 0.0];
+        weights(&mut model).fill(0.0);
         step(&mut model, &[false, false], 0.0);
         assert_eq!(model.function_count(), 2);
     }
