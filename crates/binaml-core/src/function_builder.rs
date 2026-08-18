@@ -1,45 +1,94 @@
 pub use crate::function_build_common::{
-    BuildNodeId, EphemeralGraph, EphemeralNode, FunctionBuildConfig, FunctionBuildError,
-    FunctionModel,
+    BuildNodeId, EphemeralNode, FunctionBuildConfig, FunctionBuildError, FunctionModel,
 };
 
 use crate::function_build_common::{
-    correct_count, is_constant_column, parent_top_k_slice, predict_model,
-    select_output_top_k_by_association, surviving_nodes, top_k_pair_candidates, validate_batch,
-    validate_build_config,
+    correct_count, is_constant_column, parent_top_k_end, top_k_pair_candidates, validate_batch,
+    validate_build_config, validate_feature_batch,
 };
-use crate::workspace::{BuildWorkspace, ColumnCacheError};
+use crate::function_compact::{compact_build_workspace_into, CompactError};
+use crate::function_graph::FunctionGraph;
+use crate::workspace::{BuildWorkspace, ColumnCacheError, ModelCapacity};
 use crate::{association::association_score, SignBatch};
 
 pub struct FunctionBuilder;
 
-impl FunctionBuilder {
-    pub fn build(
-        batch: SignBatch<'_>,
+/// Preallocated builder workspace; zero heap growth on [`Self::build`] after construction.
+pub struct FunctionBuildSession {
+    workspace: BuildWorkspace,
+    config: FunctionBuildConfig,
+    graph: FunctionGraph,
+}
+
+impl FunctionBuildSession {
+    pub fn new(
         config: FunctionBuildConfig,
-    ) -> Result<FunctionModel, FunctionBuildError> {
-        let capacity = crate::workspace::ModelCapacity::new(
-            batch.feature_columns.len(),
+        source_feature_count: usize,
+    ) -> Result<Self, FunctionBuildError> {
+        validate_build_config(config)?;
+        let capacity = ModelCapacity::new(
+            source_feature_count,
             config.batch_size,
             config.parent_top_k,
             1,
             config.max_expert_nodes,
             0,
         );
-        let mut workspace = BuildWorkspace::new(capacity);
-        Self::build_in_workspace(batch, config, &mut workspace)
+        if capacity.validate().is_err() {
+            return Err(FunctionBuildError::InvalidConfig);
+        }
+        Ok(Self {
+            workspace: BuildWorkspace::new(capacity),
+            config,
+            graph: FunctionGraph::empty(source_feature_count, config.max_expert_nodes),
+        })
+    }
+
+    pub fn build(&mut self, batch: SignBatch<'_>) -> Result<(BuildNodeId, bool), FunctionBuildError> {
+        FunctionBuilder::build_in_workspace(batch, self.config, &mut self.workspace)
+    }
+
+    pub fn build_model(&mut self, batch: SignBatch<'_>) -> Result<FunctionModel, FunctionBuildError> {
+        let (output, invert_output) = self.build(batch)?;
+        compact_build_workspace_into(
+            &mut self.workspace,
+            output,
+            invert_output,
+            self.config.max_expert_nodes,
+            &mut self.graph,
+        )?;
+        Ok(FunctionModel {
+            graph: self.graph.clone(),
+        })
+    }
+}
+
+impl From<CompactError> for FunctionBuildError {
+    fn from(error: CompactError) -> Self {
+        match error {
+            CompactError::ExpertTooLarge | CompactError::InvalidOutput => Self::GraphCapacity,
+        }
+    }
+}
+
+impl FunctionBuilder {
+    pub fn build(
+        batch: SignBatch<'_>,
+        config: FunctionBuildConfig,
+    ) -> Result<FunctionModel, FunctionBuildError> {
+        FunctionBuildSession::new(config, batch.feature_count())?.build_model(batch)
     }
 
     pub fn build_in_workspace(
         batch: SignBatch<'_>,
         config: FunctionBuildConfig,
         workspace: &mut BuildWorkspace,
-    ) -> Result<FunctionModel, FunctionBuildError> {
+    ) -> Result<(BuildNodeId, bool), FunctionBuildError> {
         validate_build_config(config)?;
         validate_batch(batch, config.batch_size)?;
 
         workspace.reset();
-        let source_count = batch.feature_columns.len();
+        let source_count = batch.feature_count();
         let batch_size_i64 = i64::try_from(config.batch_size)
             .expect("batch size validated to fit in i64");
         let ny = batch
@@ -50,8 +99,7 @@ impl FunctionBuilder {
 
         for input_index in 0..source_count {
             let column = batch
-                .feature_columns
-                .get(input_index)
+                .column(input_index)
                 .ok_or(FunctionBuildError::InvalidBatch)?;
             if is_constant_column(column) {
                 continue;
@@ -62,27 +110,36 @@ impl FunctionBuilder {
             let id = BuildNodeId(workspace.node_len);
             workspace.nodes[workspace.node_len] = EphemeralNode::Source { input_index };
             workspace.node_len += 1;
-            workspace.layers[0].push(id);
+            workspace.push_to_current_layer(id);
             push_source_scores(workspace, batch, id, input_index)?;
         }
 
-        if workspace.layers[0].is_empty() {
+        if workspace.current_layer().is_empty() {
             return Err(FunctionBuildError::InvalidBatch);
         }
 
-        if workspace.layers[0].len() > config.parent_top_k {
-            workspace.layers[0] = parent_top_k_slice(
-                &workspace.layers[0],
+        if workspace.current_layer().len() > config.parent_top_k {
+            let start = workspace.layer_ends[0] as usize;
+            let end = workspace.layer_ends[1] as usize;
+            let keep = parent_top_k_end(
+                &mut workspace.layer_ids[start..end],
                 &workspace.association_scores[..workspace.node_len],
                 config.parent_top_k,
             );
+            workspace.layer_ends[1] = u16::try_from(start + keep).expect("layer fits in u16");
         }
-        for parent in workspace.layers[0].clone() {
-            ensure_column(workspace, batch, parent)?;
+        let layer_zero_start = workspace.layer_ends[0] as usize;
+        let layer_zero_end = workspace.layer_ends[1] as usize;
+        let layer_zero_len = layer_zero_end - layer_zero_start;
+        workspace.parent_buf[..layer_zero_len].copy_from_slice(
+            &workspace.layer_ids[layer_zero_start..layer_zero_end],
+        );
+        for index in 0..layer_zero_len {
+            ensure_column(workspace, batch, workspace.parent_buf[index])?;
         }
         workspace
             .column_cache
-            .retain_only(&workspace.layers[0]);
+            .retain_only(&workspace.parent_buf[..layer_zero_len]);
 
         let batch_size_u8 = u8::try_from(config.batch_size)
             .expect("batch size validated to fit in u8");
@@ -94,32 +151,33 @@ impl FunctionBuilder {
         let mut layers_without_improvement = 0usize;
 
         while layers_without_improvement < config.l_pat
-            && workspace.layers.len() - 1 < config.max_composed_layers
+            && workspace.layer_count as usize - 1 < config.max_composed_layers
         {
-            let parent_layer = workspace.layers.len() - 1;
-            let parents = workspace.layers[parent_layer].clone();
-            for parent in &parents {
-                ensure_column(workspace, batch, *parent)?;
+            let parent_layer = workspace.layer_count as usize - 1;
+            let layer_start = workspace.layer_ends[parent_layer] as usize;
+            let layer_end = workspace.layer_ends[parent_layer + 1] as usize;
+            let mut parent_len = layer_end - layer_start;
+            workspace.parent_buf[..parent_len]
+                .copy_from_slice(&workspace.layer_ids[layer_start..layer_end]);
+            for index in 0..parent_len {
+                ensure_column(workspace, batch, workspace.parent_buf[index])?;
             }
-            let parents: Vec<_> = parents
-                .into_iter()
-                .filter(|id| {
-                    !is_constant_column(match workspace.nodes[id.0] {
-                        EphemeralNode::Source { input_index } => batch
-                            .feature_columns
-                            .get(input_index)
-                            .expect("source index validated during build"),
-                        EphemeralNode::Composed { .. } => workspace.column_cache.column(*id),
-                    })
-                })
-                .collect();
-            if parents.len() < 2 {
+            let mut filtered_len = 0usize;
+            for index in 0..parent_len {
+                let id = workspace.parent_buf[index];
+                if !is_constant_column(workspace.column_cache.column(id)) {
+                    workspace.parent_buf[filtered_len] = id;
+                    filtered_len += 1;
+                }
+            }
+            parent_len = filtered_len;
+            if parent_len < 2 {
                 break;
             }
 
             let candidate_count = score_pairs_into_workspace(
                 workspace,
-                &parents,
+                parent_len,
                 batch,
                 batch_size_i64,
                 ny,
@@ -133,8 +191,7 @@ impl FunctionBuilder {
             )
             .len();
 
-            workspace.layers.push(Vec::with_capacity(config.parent_top_k));
-            let new_layer = workspace.layers.len() - 1;
+            workspace.start_new_layer();
             let mut graph_full = false;
             for index in 0..keep_len {
                 if workspace.node_len >= config.max_graph_nodes {
@@ -151,7 +208,7 @@ impl FunctionBuilder {
                     truth_table: candidate.truth_table,
                 };
                 workspace.node_len += 1;
-                workspace.layers[new_layer].push(id);
+                workspace.push_to_current_layer(id);
                 workspace.association_scores[id.0] = candidate.abs_assoc;
                 workspace.accuracy_scores[id.0] = candidate.matches;
                 ensure_column(workspace, batch, id)?;
@@ -159,20 +216,22 @@ impl FunctionBuilder {
             }
 
             if graph_full {
-                if workspace.layers[new_layer].is_empty() {
-                    workspace.layers.pop();
+                if workspace.current_layer().is_empty() {
+                    workspace.pop_layer();
                 }
                 break;
             }
 
-            if workspace.layers[new_layer].is_empty() {
-                workspace.layers.pop();
+            if workspace.current_layer().is_empty() {
+                workspace.pop_layer();
                 break;
             }
 
-            workspace
-                .column_cache
-                .retain_only(&workspace.layers[new_layer]);
+            let new_layer_start = workspace.layer_ends[workspace.layer_count as usize - 1] as usize;
+            let new_layer_end = workspace.current_layer_end();
+            workspace.column_cache.retain_only(
+                &workspace.layer_ids[new_layer_start..new_layer_end],
+            );
 
             let new_best = workspace.accuracy_scores[..workspace.node_len]
                 .iter()
@@ -190,30 +249,45 @@ impl FunctionBuilder {
             }
         }
 
-        let graph = EphemeralGraph {
-            nodes: workspace.nodes[..workspace.node_len].to_vec(),
-            layers: workspace.layers.clone(),
-        };
-        let (output, invert_output) = select_output_top_k_by_association(
-            &surviving_nodes(&graph),
+        let surviving_len = workspace.current_layer_end();
+        workspace.rank_scratch[..surviving_len]
+            .copy_from_slice(&workspace.layer_ids[..surviving_len]);
+        let (output, invert_output) = crate::function_build_common::select_output_top_k_by_association_in_place(
+            &mut workspace.rank_scratch,
+            surviving_len,
             &workspace.association_scores[..workspace.node_len],
             &workspace.accuracy_scores[..workspace.node_len],
             batch_size_u8,
             config.parent_top_k,
         );
 
-        Ok(FunctionModel {
-            graph,
-            output,
-            invert_output,
-        })
+        Ok((output, invert_output))
     }
 
     pub fn predict(
         model: &FunctionModel,
         batch: SignBatch<'_>,
     ) -> Result<Vec<bool>, FunctionBuildError> {
-        predict_model(model, batch)
+        validate_feature_batch(batch)?;
+        let batch_size = batch
+            .column(0)
+            .map(|column| column.len())
+            .ok_or(FunctionBuildError::InvalidBatch)?;
+        let feature_count = batch.feature_count();
+        let mut predictions = Vec::with_capacity(batch_size);
+        let mut scratch = vec![false; model.graph.eval_scratch_len()];
+        for row in 0..batch_size {
+            let mut features = Vec::with_capacity(feature_count);
+            for index in 0..feature_count {
+                features.push(
+                    batch
+                        .column(index)
+                        .ok_or(FunctionBuildError::InvalidBatch)?[row],
+                );
+            }
+            predictions.push(model.graph.evaluate_with_scratch(&features, &mut scratch));
+        }
+        Ok(predictions)
     }
 
     pub fn fit(
@@ -243,11 +317,7 @@ fn ensure_column(
 ) -> Result<(), FunctionBuildError> {
     workspace
         .column_cache
-        .ensure(
-            &workspace.nodes[..workspace.node_len],
-            batch.feature_columns,
-            id,
-        )
+        .ensure(&workspace.nodes[..workspace.node_len], batch, id)
         .map_err(column_cache_error)
 }
 
@@ -262,7 +332,7 @@ fn column_cache_error(error: ColumnCacheError) -> FunctionBuildError {
 
 fn score_pairs_into_workspace(
     workspace: &mut BuildWorkspace,
-    parents: &[BuildNodeId],
+    parent_len: usize,
     batch: SignBatch<'_>,
     batch_size_i64: i64,
     ny: i64,
@@ -271,15 +341,17 @@ fn score_pairs_into_workspace(
 
     let mut candidate_count = 0;
     let mut pair_index = 0;
-    for (left_index, left) in parents.iter().enumerate() {
-        for right in parents.iter().skip(left_index + 1) {
+    for left_index in 0..parent_len {
+        for right_index in (left_index + 1)..parent_len {
+            let left = workspace.parent_buf[left_index];
+            let right = workspace.parent_buf[right_index];
             let (first, second) = if left.0 <= right.0 {
-                (*left, *right)
+                (left, right)
             } else {
-                (*right, *left)
+                (right, left)
             };
-            let first_column = parent_column(workspace, batch, first);
-            let second_column = parent_column(workspace, batch, second);
+            let first_column = workspace.column_cache.column(first);
+            let second_column = workspace.column_cache.column(second);
             if is_constant_column(first_column) || is_constant_column(second_column) {
                 continue;
             }
@@ -308,20 +380,6 @@ fn score_pairs_into_workspace(
     Ok(candidate_count)
 }
 
-fn parent_column<'a>(
-    workspace: &'a BuildWorkspace,
-    batch: SignBatch<'a>,
-    id: BuildNodeId,
-) -> &'a [bool] {
-    match workspace.nodes[id.0] {
-        EphemeralNode::Source { input_index } => batch
-            .feature_columns
-            .get(input_index)
-            .expect("source index validated during build"),
-        EphemeralNode::Composed { .. } => workspace.column_cache.column(id),
-    }
-}
-
 fn push_source_scores(
     workspace: &mut BuildWorkspace,
     batch: SignBatch<'_>,
@@ -329,8 +387,7 @@ fn push_source_scores(
     input_index: usize,
 ) -> Result<(), FunctionBuildError> {
     let column = batch
-        .feature_columns
-        .get(input_index)
+        .column(input_index)
         .ok_or(FunctionBuildError::InvalidBatch)?;
     workspace.association_scores[id.0] = association_score(column, batch.signs).abs();
     workspace.accuracy_scores[id.0] = correct_count(column, batch.signs);
@@ -340,8 +397,8 @@ fn push_source_scores(
 #[cfg(test)]
 mod tests {
     use super::{FunctionBuildConfig, FunctionBuilder, SignBatch};
-    use crate::function_build_common::EphemeralNode;
     use crate::function_build_common::{DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES};
+    use crate::function_graph::CompactNode;
 
     fn config(batch_size: usize, parent_top_k: usize, source_count: usize) -> FunctionBuildConfig {
         FunctionBuildConfig::new(
@@ -360,19 +417,17 @@ mod tests {
         let columns = [&first[..], &second[..]];
         let signs = [false, true, true, true];
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(4, 2, 2),
         )
         .unwrap();
-        assert_eq!(model.graph.layers[1].len(), 1);
-        assert!(!model.invert_output);
-        assert!(matches!(
-            model.graph.nodes[model.output.0],
-            EphemeralNode::Composed { .. }
-        ));
+        assert!(model.graph.node_count() >= 2);
+        assert!(!model.graph.invert_output());
+        assert!(model
+            .graph
+            .nodes()
+            .iter()
+            .any(|node| matches!(node, CompactNode::Composed { .. })));
     }
 
     #[test]
@@ -382,15 +437,12 @@ mod tests {
         let columns = [&constant[..], &varying[..]];
         let signs = [false, true, false, true];
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(4, 2, 2),
         )
         .unwrap();
-        assert_eq!(model.graph.layers[0].len(), 1);
-        assert_eq!(model.graph.layers.len(), 1);
+        assert_eq!(model.graph.source_count(), 1);
+        assert_eq!(model.graph.node_count(), 1);
     }
 
     #[test]
@@ -401,15 +453,12 @@ mod tests {
         let columns = [&a[..], &b[..], &c[..]];
         let signs = [false, true, false, true];
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(4, 2, 3),
         )
         .unwrap();
-        assert_eq!(model.graph.layers[0].len(), 1);
-        assert_eq!(model.graph.layers.len(), 1);
+        assert_eq!(model.graph.source_count(), 1);
+        assert_eq!(model.graph.node_count(), 1);
     }
 
     #[test]
@@ -418,10 +467,7 @@ mod tests {
         let columns = [&feature[..]];
         let signs = [true, false, true, false, true, false, true, false];
         let (predictions, score) = FunctionBuilder::fit_predict(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(8, 2, 1),
         )
         .unwrap();
@@ -436,10 +482,7 @@ mod tests {
         let columns = [&first[..], &second[..]];
         let signs = [false, true, true, false];
         let (predictions, score) = FunctionBuilder::fit_predict(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(4, 2, 2),
         )
         .unwrap();
@@ -454,10 +497,7 @@ mod tests {
         let columns = [&first[..], &second[..]];
         let signs = [false, true, true, true];
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config(4, 2, 2),
         )
         .unwrap();
@@ -467,10 +507,7 @@ mod tests {
         let holdout_signs = [true, true];
         let predictions = FunctionBuilder::predict(
             &model,
-            SignBatch {
-                feature_columns: &holdout_columns,
-                signs: &holdout_signs,
-            },
+            SignBatch::from_columns(&holdout_columns, &holdout_signs),
         )
         .unwrap();
         assert_eq!(predictions, [true, true]);

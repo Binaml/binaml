@@ -85,7 +85,7 @@ impl BClassifier {
 
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.ensemble.functions.len()
+        self.ensemble.head.active
     }
 
     #[must_use]
@@ -104,7 +104,7 @@ impl BClassifier {
 
     pub fn predict(&mut self, features: &[bool]) -> Result<usize, BClassifierError> {
         self.ensemble.begin_predict(features)?;
-        let count = self.ensemble.functions.len();
+        let count = self.ensemble.head.active;
         Ok(self.ensemble.head.predict_with_scratch(
             &self.ensemble.workspace.pending_function_values[..count],
             &mut self.ensemble.workspace.logits,

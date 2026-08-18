@@ -1,6 +1,6 @@
-use crate::function_builder::{BuildNodeId, EphemeralGraph, EphemeralNode};
+use crate::function_build_common::{BuildNodeId, EphemeralNode};
 use crate::function_graph::{CompactNode, FunctionGraph};
-use std::collections::{HashMap, HashSet};
+use crate::workspace::BuildWorkspace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactError {
@@ -8,15 +8,33 @@ pub enum CompactError {
     ExpertTooLarge,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Slot {
-    Source(usize),
-    Constant(bool),
-    Composed {
-        first: usize,
-        second: usize,
-        truth_table: u8,
-    },
+pub(crate) const NO_ALIAS: u32 = u32::MAX;
+pub(crate) const NO_MAP: u16 = u16::MAX;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactSlotKind {
+    Source,
+    Constant,
+    Composed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CompactSlot {
+    pub kind: CompactSlotKind,
+    pub a: usize,
+    pub b: usize,
+    pub truth_table: u8,
+}
+
+impl Default for CompactSlot {
+    fn default() -> Self {
+        Self {
+            kind: CompactSlotKind::Source,
+            a: 0,
+            b: 0,
+            truth_table: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,91 +49,68 @@ enum SimplifyResult {
     },
 }
 
-pub fn compact(graph: EphemeralGraph, output: BuildNodeId) -> Result<FunctionGraph, CompactError> {
-    compact_with_limit(graph, output, usize::MAX)
-}
-
-pub fn compact_with_limit(
-    graph: EphemeralGraph,
+pub(crate) fn compact_build_workspace_into(
+    workspace: &mut BuildWorkspace,
     output: BuildNodeId,
-    max_expert_nodes: usize,
-) -> Result<FunctionGraph, CompactError> {
-    let (source_indices, nodes, output) = compact_parts(graph, output, max_expert_nodes)?;
-    let mut function = FunctionGraph::empty(source_indices.len().max(1), nodes.len().max(1));
-    function.reset_from_parts(&source_indices, &nodes, output, false);
-    Ok(function)
-}
-
-pub fn compact_with_limit_and_invert(
-    graph: EphemeralGraph,
-    output: BuildNodeId,
-    max_expert_nodes: usize,
     invert_output: bool,
-) -> Result<FunctionGraph, CompactError> {
-    let (source_indices, nodes, output) = compact_parts(graph, output, max_expert_nodes)?;
-    let mut function = FunctionGraph::empty(source_indices.len().max(1), nodes.len().max(1));
-    function.reset_from_parts(&source_indices, &nodes, output, invert_output);
-    Ok(function)
-}
-
-fn compact_parts(
-    graph: EphemeralGraph,
-    output: BuildNodeId,
     max_expert_nodes: usize,
-) -> Result<(Vec<usize>, Vec<CompactNode>, usize), CompactError> {
-    if output.0 >= graph.nodes.len() {
+    graph: &mut FunctionGraph,
+) -> Result<(), CompactError> {
+    if output.0 >= workspace.node_len {
         return Err(CompactError::InvalidOutput);
     }
 
-    let mut slots: Vec<Slot> = graph
-        .nodes
-        .iter()
-        .map(|node| match node {
-            EphemeralNode::Source { input_index } => Slot::Source(*input_index),
+    for index in 0..workspace.node_len {
+        workspace.compact_aliases[index] = NO_ALIAS;
+        workspace.compact_slots[index] = match workspace.nodes[index] {
+            EphemeralNode::Source { input_index } => CompactSlot {
+                kind: CompactSlotKind::Source,
+                a: input_index,
+                b: 0,
+                truth_table: 0,
+            },
             EphemeralNode::Composed {
                 first,
                 second,
                 truth_table,
-            } => Slot::Composed {
-                first: first.0,
-                second: second.0,
-                truth_table: *truth_table,
+            } => CompactSlot {
+                kind: CompactSlotKind::Composed,
+                a: first.0,
+                b: second.0,
+                truth_table,
             },
-        })
-        .collect();
-    let mut aliases = vec![None; slots.len()];
+        };
+    }
 
     loop {
         let mut changed = false;
-        for index in (0..slots.len()).rev() {
-            if aliases[index].is_some() {
+        for index in (0..workspace.node_len).rev() {
+            if workspace.compact_aliases[index] != NO_ALIAS {
                 continue;
             }
-            if !matches!(slots[index], Slot::Composed { .. }) {
+            let slot = workspace.compact_slots[index];
+            if slot.kind != CompactSlotKind::Composed {
                 continue;
             }
-            let Slot::Composed {
-                first,
-                second,
-                truth_table,
-            } = slots[index].clone()
-            else {
-                continue;
-            };
             match simplify(
-                resolve_id(first, &aliases),
-                resolve_id(second, &aliases),
-                truth_table,
+                resolve_alias_u32(slot.a, &workspace.compact_aliases),
+                resolve_alias_u32(slot.b, &workspace.compact_aliases),
+                slot.truth_table,
             ) {
                 SimplifyResult::Keep => {}
                 SimplifyResult::Constant(value) => {
-                    slots[index] = Slot::Constant(value);
+                    workspace.compact_slots[index] = CompactSlot {
+                        kind: CompactSlotKind::Constant,
+                        a: usize::from(value),
+                        b: 0,
+                        truth_table: 0,
+                    };
                     changed = true;
                 }
                 SimplifyResult::Alias(target) => {
-                    let target = resolve_id(target, &aliases);
-                    if aliases[index] != Some(target) {
-                        aliases[index] = Some(target);
+                    let target = resolve_alias_u32(target, &workspace.compact_aliases);
+                    if workspace.compact_aliases[index] != target as u32 {
+                        workspace.compact_aliases[index] = target as u32;
                         changed = true;
                     }
                 }
@@ -124,15 +119,16 @@ fn compact_parts(
                     second,
                     truth_table,
                 } => {
-                    let first = resolve_id(first, &aliases);
-                    let second = resolve_id(second, &aliases);
-                    let next = Slot::Composed {
-                        first,
-                        second,
+                    let first = resolve_alias_u32(first, &workspace.compact_aliases);
+                    let second = resolve_alias_u32(second, &workspace.compact_aliases);
+                    let next = CompactSlot {
+                        kind: CompactSlotKind::Composed,
+                        a: first,
+                        b: second,
                         truth_table,
                     };
-                    if slots[index] != next {
-                        slots[index] = next;
+                    if workspace.compact_slots[index] != next {
+                        workspace.compact_slots[index] = next;
                         changed = true;
                     }
                 }
@@ -143,65 +139,132 @@ fn compact_parts(
         }
     }
 
-    let output = resolve_id(output.0, &aliases);
-    let reachable = backward_reach(&slots, &aliases, output);
-    let order: Vec<usize> = (0..slots.len())
-        .filter(|index| reachable.contains(index))
-        .collect();
-    let mut old_to_new = HashMap::new();
-    let mut nodes = Vec::new();
-    let mut source_indices = Vec::new();
-    let mut source_map = HashMap::new();
-
-    for &old_index in &order {
-        let resolved = resolve_id(old_index, &aliases);
-        let new_index = nodes.len();
-        old_to_new.insert(old_index, new_index);
-        match &slots[resolved] {
-            Slot::Source(input_index) => {
-                let compact_source = *source_map.entry(*input_index).or_insert_with(|| {
-                    let index = source_indices.len();
-                    source_indices.push(*input_index);
-                    index
-                });
-                nodes.push(CompactNode::Source(compact_source));
-            }
-            Slot::Constant(value) => nodes.push(CompactNode::Constant(*value)),
-            Slot::Composed {
-                first,
-                second,
-                truth_table,
-            } => {
-                let first = *old_to_new
-                    .get(&resolve_id(*first, &aliases))
-                    .ok_or(CompactError::InvalidOutput)?;
-                let second = *old_to_new
-                    .get(&resolve_id(*second, &aliases))
-                    .ok_or(CompactError::InvalidOutput)?;
-                nodes.push(CompactNode::Composed {
-                    first,
-                    second,
-                    truth_table: *truth_table,
-                });
-            }
+    let output = resolve_alias_u32(output.0, &workspace.compact_aliases);
+    workspace.compact_reachable.fill(false);
+    let mut stack_len = 0usize;
+    workspace.compact_order[stack_len] = output as u16;
+    stack_len += 1;
+    while stack_len > 0 {
+        stack_len -= 1;
+        let index = workspace.compact_order[stack_len] as usize;
+        let resolved = resolve_alias_u32(index, &workspace.compact_aliases);
+        if workspace.compact_reachable[resolved] {
+            continue;
+        }
+        workspace.compact_reachable[resolved] = true;
+        if let CompactSlot {
+            kind: CompactSlotKind::Composed,
+            a: first,
+            b: second,
+            ..
+        } = workspace.compact_slots[resolved]
+        {
+            workspace.compact_order[stack_len] = first as u16;
+            stack_len += 1;
+            workspace.compact_order[stack_len] = second as u16;
+            stack_len += 1;
         }
     }
 
-    let output = *old_to_new.get(&output).ok_or(CompactError::InvalidOutput)?;
+    let mut order_len = 0usize;
+    for index in 0..workspace.node_len {
+        if workspace.compact_reachable[index] {
+            workspace.compact_order[order_len] = index as u16;
+            order_len += 1;
+        }
+    }
 
-    if nodes.len() > max_expert_nodes {
+    workspace.compact_old_to_new.fill(NO_MAP);
+    let mut source_count = 0usize;
+    let mut node_count = 0usize;
+
+    for order_index in 0..order_len {
+        let old_index = workspace.compact_order[order_index] as usize;
+        let resolved = resolve_alias_u32(old_index, &workspace.compact_aliases);
+        let new_index = node_count;
+        workspace.compact_old_to_new[old_index] = new_index as u16;
+        match workspace.compact_slots[resolved] {
+            CompactSlot {
+                kind: CompactSlotKind::Source,
+                a: input_index,
+                ..
+            } => {
+                let compact_source = find_or_insert_source(
+                    &mut workspace.compact_sources,
+                    &mut source_count,
+                    input_index,
+                );
+                workspace.compact_nodes[new_index] = CompactNode::Source(compact_source);
+            }
+            CompactSlot {
+                kind: CompactSlotKind::Constant,
+                a: value,
+                ..
+            } => {
+                workspace.compact_nodes[new_index] = CompactNode::Constant(value != 0);
+            }
+            CompactSlot {
+                kind: CompactSlotKind::Composed,
+                a: first,
+                b: second,
+                truth_table,
+            } => {
+                let first = workspace
+                    .compact_old_to_new
+                    .get(resolve_alias_u32(first, &workspace.compact_aliases))
+                    .copied()
+                    .ok_or(CompactError::InvalidOutput)? as usize;
+                let second = workspace
+                    .compact_old_to_new
+                    .get(resolve_alias_u32(second, &workspace.compact_aliases))
+                    .copied()
+                    .ok_or(CompactError::InvalidOutput)? as usize;
+                workspace.compact_nodes[new_index] = CompactNode::Composed {
+                    first,
+                    second,
+                    truth_table,
+                };
+            }
+        }
+        node_count += 1;
+    }
+
+    let output = workspace
+        .compact_old_to_new
+        .get(output)
+        .copied()
+        .ok_or(CompactError::InvalidOutput)? as usize;
+
+    if node_count > max_expert_nodes {
         return Err(CompactError::ExpertTooLarge);
     }
 
-    Ok((source_indices, nodes, output))
+    graph.reset_from_parts(
+        &workspace.compact_sources[..source_count],
+        &workspace.compact_nodes[..node_count],
+        output,
+        invert_output,
+    );
+    Ok(())
 }
 
-fn resolve_id(index: usize, aliases: &[Option<usize>]) -> usize {
-    let mut current = index;
-    while let Some(next) = aliases[current] {
-        current = next;
+fn find_or_insert_source(sources: &mut [usize], source_count: &mut usize, input_index: usize) -> usize {
+    for (index, &existing) in sources.iter().enumerate().take(*source_count) {
+        if existing == input_index {
+            return index;
+        }
     }
-    current
+    let index = *source_count;
+    sources[index] = input_index;
+    *source_count += 1;
+    index
+}
+
+fn resolve_alias_u32(mut index: usize, aliases: &[u32]) -> usize {
+    while aliases[index] != NO_ALIAS {
+        index = aliases[index] as usize;
+    }
+    index
 }
 
 fn simplify(first: usize, second: usize, truth_table: u8) -> SimplifyResult {
@@ -232,32 +295,15 @@ fn simplify(first: usize, second: usize, truth_table: u8) -> SimplifyResult {
     }
 }
 
-fn backward_reach(slots: &[Slot], aliases: &[Option<usize>], output: usize) -> HashSet<usize> {
-    let mut reachable = HashSet::new();
-    let mut stack = vec![output];
-    while let Some(index) = stack.pop() {
-        let resolved = resolve_id(index, aliases);
-        if !reachable.insert(resolved) {
-            continue;
-        }
-        match &slots[resolved] {
-            Slot::Source(_) | Slot::Constant(_) => {}
-            Slot::Composed { first, second, .. } => {
-                stack.push(*first);
-                stack.push(*second);
-            }
-        }
-    }
-    reachable
-}
-
 #[cfg(test)]
 mod tests {
-    use super::compact;
-    use crate::function_build_common::{DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES};
-    use crate::function_builder::{
-        BuildNodeId, EphemeralGraph, EphemeralNode, FunctionBuildConfig, FunctionBuilder,
+    use super::compact_build_workspace_into;
+    use crate::function_build_common::{
+        BuildNodeId, EphemeralNode, DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES,
     };
+    use crate::function_builder::{FunctionBuildConfig, FunctionBuilder};
+    use crate::function_graph::{CompactNode, FunctionGraph};
+    use crate::workspace::{BuildWorkspace, ModelCapacity};
     use crate::SignBatch;
 
     #[test]
@@ -268,32 +314,34 @@ mod tests {
         let signs = [false, true, false, true];
         let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config,
         )
         .unwrap();
-        let compacted = compact(model.graph, model.output).unwrap();
-        assert!(compacted.source_count() <= 2);
+        assert!(model.graph.source_count() <= 2);
     }
 
     #[test]
     fn compaction_folds_truth_tables() {
-        let graph = EphemeralGraph {
-            nodes: vec![
-                EphemeralNode::Source { input_index: 0 },
-                EphemeralNode::Composed {
-                    first: BuildNodeId(0),
-                    second: BuildNodeId(0),
-                    truth_table: 0b1010,
-                },
-            ],
-            layers: vec![vec![BuildNodeId(0)], vec![BuildNodeId(1)]],
+        let capacity = ModelCapacity::new(1, 4, 2, 1, DEFAULT_MAX_EXPERT_NODES, 0);
+        let mut workspace = BuildWorkspace::new(capacity);
+        workspace.nodes[0] = EphemeralNode::Source { input_index: 0 };
+        workspace.nodes[1] = EphemeralNode::Composed {
+            first: BuildNodeId(0),
+            second: BuildNodeId(0),
+            truth_table: 0b1010,
         };
-        let compacted = compact(graph, BuildNodeId(1)).unwrap();
-        assert_eq!(compacted.node_count(), 1);
+        workspace.node_len = 2;
+        let mut graph = FunctionGraph::empty(1, DEFAULT_MAX_EXPERT_NODES);
+        compact_build_workspace_into(
+            &mut workspace,
+            BuildNodeId(1),
+            false,
+            DEFAULT_MAX_EXPERT_NODES,
+            &mut graph,
+        )
+        .unwrap();
+        assert_eq!(graph.node_count(), 1);
     }
 
     #[test]
@@ -305,16 +353,12 @@ mod tests {
         let signs = [false, true, true, false];
         let config = FunctionBuildConfig::new(4, 3, 3, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
         let model = FunctionBuilder::build(
-            SignBatch {
-                feature_columns: &columns,
-                signs: &signs,
-            },
+            SignBatch::from_columns(&columns, &signs),
             config,
         )
         .unwrap();
-        let compacted = compact(model.graph, model.output).unwrap();
-        for (index, node) in compacted.nodes.iter().enumerate() {
-            if let crate::function_graph::CompactNode::Composed { first, second, .. } = node {
+        for (index, node) in model.graph.nodes().iter().enumerate() {
+            if let CompactNode::Composed { first, second, .. } = node {
                 assert!(first < &index);
                 assert!(second < &index);
             }

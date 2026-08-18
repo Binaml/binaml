@@ -49,9 +49,28 @@ impl FunctionGraph {
         self.invert_output = invert_output;
     }
 
+    pub(crate) fn copy_from(&mut self, other: &Self) {
+        let source_len = other.n_sources as usize;
+        let node_len = other.n_nodes as usize;
+        self.source_indices[..source_len]
+            .copy_from_slice(&other.source_indices[..source_len]);
+        self.nodes[..node_len].clone_from_slice(&other.nodes[..node_len]);
+        self.n_sources = other.n_sources;
+        self.n_nodes = other.n_nodes;
+        self.output = other.output;
+        self.invert_output = other.invert_output;
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.n_sources = 0;
+        self.n_nodes = 0;
+        self.output = 0;
+        self.invert_output = false;
+    }
+
     #[must_use]
     pub fn evaluate(&self, features: &[bool]) -> bool {
-        self.evaluate_with_scratch(features, &mut vec![false; self.nodes.len()])
+        self.evaluate_with_scratch(features, &mut vec![false; self.eval_scratch_len()])
     }
 
     pub(crate) fn evaluate_with_scratch(&self, features: &[bool], scratch: &mut [bool]) -> bool {
@@ -76,6 +95,21 @@ impl FunctionGraph {
         } else {
             value
         }
+    }
+
+    pub(crate) fn eval_scratch_len(&self) -> usize {
+        self.n_nodes as usize
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn invert_output(&self) -> bool {
+        self.invert_output
+    }
+
+    #[cfg(test)]
+    pub(crate) fn nodes(&self) -> &[CompactNode] {
+        &self.nodes[..self.n_nodes as usize]
     }
 
     #[cfg(test)]

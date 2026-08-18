@@ -83,7 +83,7 @@ impl BRegressor {
 
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.ensemble.functions.len()
+        self.ensemble.head.active
     }
 
     #[must_use]
@@ -96,7 +96,7 @@ impl BRegressor {
 
     pub fn predict(&mut self, features: &[bool]) -> Result<f64, BRegressorError> {
         self.ensemble.begin_predict(features)?;
-        let count = self.ensemble.functions.len();
+        let count = self.ensemble.head.active;
         Ok(self
             .ensemble
             .head

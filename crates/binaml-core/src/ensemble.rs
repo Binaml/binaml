@@ -1,4 +1,4 @@
-use crate::function_compact::{compact_with_limit_and_invert, CompactError};
+use crate::function_compact::{compact_build_workspace_into, CompactError};
 use crate::workspace::{EnsembleWorkspace, ModelCapacity, WorkspaceError};
 use crate::{
     FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch,
@@ -105,6 +105,7 @@ pub(crate) trait EnsembleHead: std::fmt::Debug {
     fn append_function(&mut self);
     fn remove_function(&mut self, index: usize);
     fn prune_index(&self) -> usize;
+    fn active(&self) -> usize;
 }
 
 #[derive(Debug)]
@@ -112,7 +113,7 @@ pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
     pub config: EnsembleConfig,
     pub source_feature_count: usize,
     pub head: H,
-    pub functions: Vec<FunctionGraph>,
+    pub functions: Box<[FunctionGraph]>,
     pub n_observed: usize,
     pub(crate) workspace: EnsembleWorkspace,
     pending: bool,
@@ -128,11 +129,15 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         config.validate(source_feature_count)?;
         let capacity = config.capacity(source_feature_count, n_classes);
         let workspace = EnsembleWorkspace::new(capacity)?;
+        let functions = (0..config.max_functions)
+            .map(|_| FunctionGraph::empty(source_feature_count, config.max_expert_nodes))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Ok(Self {
             config,
             source_feature_count,
             head,
-            functions: Vec::new(),
+            functions,
             n_observed: 0,
             workspace,
             pending: false,
@@ -146,7 +151,7 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
     }
 
     fn function_count(&self) -> usize {
-        self.functions.len()
+        self.head.active()
     }
 
     fn function_values(&mut self, features: &[bool]) -> &[bool] {
@@ -215,38 +220,43 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
 
     fn finish_batch(&mut self) -> Result<(), EnsembleError> {
         let batch_size = self.config.batch_size;
-        let feature_count = self.source_feature_count;
         let build_config = self.config.build_config(self.source_feature_count);
-        let model = {
-            let batch_features = &self.workspace.batch_features;
-            let mut column_refs = Vec::with_capacity(feature_count);
-            for feature in 0..feature_count {
-                let start = feature * batch_size;
-                column_refs.push(&batch_features[start..start + batch_size]);
-            }
-            let batch = SignBatch {
-                feature_columns: &column_refs,
-                signs: &self.workspace.batch_signs[..batch_size],
-            };
-            match FunctionBuilder::build_in_workspace(batch, build_config, &mut self.workspace.build)
-            {
-                Ok(model) => model,
+        let feature_count = self.source_feature_count;
+        let max_expert_nodes = self.config.max_expert_nodes;
+        let (output, invert_output) = {
+            let workspace = &mut self.workspace;
+            let batch = SignBatch::from_flat(
+                &workspace.batch_features[..batch_size * feature_count],
+                batch_size,
+                feature_count,
+                &workspace.batch_signs[..batch_size],
+            );
+            match FunctionBuilder::build_in_workspace(batch, build_config, &mut workspace.build) {
+                Ok(result) => result,
                 Err(FunctionBuildError::InvalidBatch) => return Ok(()),
                 Err(error) => return Err(error.into()),
             }
         };
-        let compacted = compact_with_limit_and_invert(
-            model.graph,
-            model.output,
-            self.config.max_expert_nodes,
-            model.invert_output,
-        )?;
-        if self.functions.len() >= self.config.max_functions {
+
+        if self.head.active() >= self.config.max_functions {
             let index = self.head.prune_index();
-            self.functions.remove(index);
+            let active = self.head.active();
+            for slot in index..active - 1 {
+                let (left, right) = self.functions.split_at_mut(slot + 1);
+                left[slot].copy_from(&right[0]);
+            }
+            self.functions[active - 1].clear();
             self.head.remove_function(index);
         }
-        self.functions.push(compacted);
+
+        let slot = self.head.active();
+        compact_build_workspace_into(
+            &mut self.workspace.build,
+            output,
+            invert_output,
+            max_expert_nodes,
+            &mut self.functions[slot],
+        )?;
         self.head.append_function();
         Ok(())
     }
@@ -334,6 +344,10 @@ impl EnsembleHead for RegressionHead {
             })
             .map(|(index, _)| index)
             .expect("non-empty ensemble")
+    }
+
+    fn active(&self) -> usize {
+        self.active
     }
 }
 
@@ -472,9 +486,14 @@ impl EnsembleHead for ClassificationHead {
     }
 
     fn remove_function(&mut self, index: usize) {
+        const MAX_CLASSES: usize = 64;
+        let mut temp = [0.0_f64; MAX_CLASSES];
+        let n_classes = self.n_classes;
+        assert!(n_classes <= MAX_CLASSES);
         for slot in index..self.active - 1 {
-            let next = self.expert_weights(slot + 1).to_vec();
-            self.expert_weights_mut(slot).copy_from_slice(&next);
+            temp[..n_classes].copy_from_slice(self.expert_weights(slot + 1));
+            self.expert_weights_mut(slot)
+                .copy_from_slice(&temp[..n_classes]);
         }
         self.expert_weights_mut(self.active - 1).fill(0.0);
         self.active -= 1;
@@ -497,6 +516,10 @@ impl EnsembleHead for ClassificationHead {
                     .then_with(|| left_index.cmp(&right_index))
             })
             .expect("non-empty ensemble")
+    }
+
+    fn active(&self) -> usize {
+        self.active
     }
 }
 

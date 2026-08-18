@@ -135,10 +135,7 @@ impl FunctionLearner {
     ) -> PyResult<PyObject> {
         let (columns, signs, batch_size) = sign_batch_from_arrays(features, signs)?;
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
-        let batch = SignBatch {
-            feature_columns: &column_refs,
-            signs: &signs,
-        };
+        let batch = SignBatch::from_columns(&column_refs, &signs);
         let started = Instant::now();
         let (model, score) =
             FunctionBuilder::fit(batch, self.build_config(batch_size, column_refs.len())).map_err(model_error)?;
@@ -161,10 +158,7 @@ impl FunctionLearner {
         let (columns, batch_size) = feature_batch(features)?;
         let dummy_signs = vec![false; batch_size];
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
-        let batch = SignBatch {
-            feature_columns: &column_refs,
-            signs: &dummy_signs,
-        };
+        let batch = SignBatch::from_columns(&column_refs, &dummy_signs);
         let predictions = FunctionBuilder::predict(model, batch).map_err(model_error)?;
         predictions_to_py(py, predictions)
     }
@@ -177,10 +171,7 @@ impl FunctionLearner {
     ) -> PyResult<PyObject> {
         let (columns, signs, batch_size) = sign_batch_from_arrays(features, signs)?;
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
-        let batch = SignBatch {
-            feature_columns: &column_refs,
-            signs: &signs,
-        };
+        let batch = SignBatch::from_columns(&column_refs, &signs);
         let started = Instant::now();
         let (predictions, score) =
             FunctionBuilder::fit_predict(batch, self.build_config(batch_size, column_refs.len()))

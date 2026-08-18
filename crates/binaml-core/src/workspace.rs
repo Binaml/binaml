@@ -3,6 +3,7 @@ use crate::function_build_common::{
     PairCandidate,
 };
 use crate::function_graph::CompactNode;
+use crate::SignBatch;
 use crate::FeatureCounter;
 
 #[derive(Debug, Clone, Copy)]
@@ -101,7 +102,7 @@ impl FlatColumnCache {
     pub(crate) fn ensure(
         &mut self,
         nodes: &[EphemeralNode],
-        feature_columns: &[&[bool]],
+        batch: SignBatch<'_>,
         id: BuildNodeId,
     ) -> Result<(), ColumnCacheError> {
         if id.0 >= self.slot_for_id.len() {
@@ -118,7 +119,7 @@ impl FlatColumnCache {
                     .any(|&mapped| mapped != NO_SLOT && mapped as usize == *candidate)
             })
             .ok_or(ColumnCacheError::ColumnCapacity)?;
-        self.compute_into_slot(nodes, feature_columns, id, slot)?;
+        self.compute_into_slot(nodes, batch, id, slot)?;
         self.slot_for_id[id.0] = u16::try_from(slot).expect("slot fits in u16");
         Ok(())
     }
@@ -154,15 +155,15 @@ impl FlatColumnCache {
     fn compute_into_slot(
         &mut self,
         nodes: &[EphemeralNode],
-        feature_columns: &[&[bool]],
+        batch: crate::SignBatch<'_>,
         id: BuildNodeId,
         slot: usize,
     ) -> Result<(), ColumnCacheError> {
         let start = slot * self.batch_size;
         match nodes[id.0] {
             EphemeralNode::Source { input_index } => {
-                let column = feature_columns
-                    .get(input_index)
+                let column = batch
+                    .column(input_index)
                     .ok_or(ColumnCacheError::InvalidBatch)?;
                 self.columns[start..start + self.batch_size].copy_from_slice(column);
             }
@@ -171,8 +172,8 @@ impl FlatColumnCache {
                 second,
                 truth_table,
             } => {
-                self.ensure(nodes, feature_columns, first)?;
-                self.ensure(nodes, feature_columns, second)?;
+                self.ensure(nodes, batch, first)?;
+                self.ensure(nodes, batch, second)?;
                 let first_start = self.slot_for_id[first.0] as usize * self.batch_size;
                 let second_start = self.slot_for_id[second.0] as usize * self.batch_size;
                 for index in 0..self.batch_size {
@@ -203,12 +204,21 @@ pub(crate) struct BuildWorkspace {
     pub node_len: usize,
     pub association_scores: Box<[i64]>,
     pub accuracy_scores: Box<[u8]>,
-    pub layers: Vec<Vec<BuildNodeId>>,
+    pub layer_ids: Box<[BuildNodeId]>,
+    pub layer_ends: Box<[u16]>,
+    pub layer_count: u16,
+    pub parent_buf: Box<[BuildNodeId]>,
+    pub rank_scratch: Box<[BuildNodeId]>,
     pub column_cache: FlatColumnCache,
     pub pair_scratch: Box<[FeatureCounter]>,
     pub pair_candidates: Box<[PairCandidate]>,
     pub compact_nodes: Box<[CompactNode]>,
     pub compact_sources: Box<[usize]>,
+    pub compact_slots: Box<[crate::function_compact::CompactSlot]>,
+    pub compact_aliases: Box<[u32]>,
+    pub compact_reachable: Box<[bool]>,
+    pub compact_old_to_new: Box<[u16]>,
+    pub compact_order: Box<[u16]>,
     pub capacity: ModelCapacity,
 }
 
@@ -216,12 +226,19 @@ impl BuildWorkspace {
     pub fn new(capacity: ModelCapacity) -> Self {
         let v = capacity.graph_nodes;
         let p = capacity.pair_count;
+        let k_p = capacity.parent_top_k;
+        let l_build = capacity.l_build;
+        let max_layer_ids = k_p * (l_build + 1);
         Self {
             nodes: vec![EphemeralNode::Source { input_index: 0 }; v].into_boxed_slice(),
             node_len: 0,
             association_scores: vec![0_i64; v].into_boxed_slice(),
             accuracy_scores: vec![0_u8; v].into_boxed_slice(),
-            layers: Vec::with_capacity(capacity.l_build + 1),
+            layer_ids: vec![BuildNodeId(0); max_layer_ids].into_boxed_slice(),
+            layer_ends: vec![0_u16; l_build + 2].into_boxed_slice(),
+            layer_count: 1,
+            parent_buf: vec![BuildNodeId(0); k_p].into_boxed_slice(),
+            rank_scratch: vec![BuildNodeId(0); v].into_boxed_slice(),
             column_cache: FlatColumnCache::new(
                 capacity.batch_size,
                 capacity.parent_top_k,
@@ -242,15 +259,70 @@ impl BuildWorkspace {
             compact_nodes: vec![CompactNode::Constant(false); capacity.max_expert_nodes]
                 .into_boxed_slice(),
             compact_sources: vec![0_usize; capacity.source_feature_count].into_boxed_slice(),
+            compact_slots: vec![crate::function_compact::CompactSlot::default(); v]
+                .into_boxed_slice(),
+            compact_aliases: vec![crate::function_compact::NO_ALIAS; v].into_boxed_slice(),
+            compact_reachable: vec![false; v].into_boxed_slice(),
+            compact_old_to_new: vec![crate::function_compact::NO_MAP; v].into_boxed_slice(),
+            compact_order: vec![0_u16; v].into_boxed_slice(),
             capacity,
         }
     }
 
     pub fn reset(&mut self) {
         self.node_len = 0;
-        self.layers.clear();
-        self.layers.push(Vec::with_capacity(self.capacity.parent_top_k));
+        self.layer_count = 1;
+        self.layer_ends[0] = 0;
+        self.layer_ends[1] = 0;
         self.column_cache.reset();
+    }
+
+    pub fn layer(&self, index: usize) -> &[BuildNodeId] {
+        let start = self.layer_ends[index] as usize;
+        let end = self.layer_ends[index + 1] as usize;
+        &self.layer_ids[start..end]
+    }
+
+    pub fn current_layer(&self) -> &[BuildNodeId] {
+        let index = self.layer_count as usize - 1;
+        self.layer(index)
+    }
+
+    pub fn current_layer_end(&self) -> usize {
+        self.layer_ends[self.layer_count as usize] as usize
+    }
+
+    pub fn push_to_current_layer(&mut self, id: BuildNodeId) {
+        let end_index = self.layer_count as usize;
+        let pos = self.layer_ends[end_index] as usize;
+        self.layer_ids[pos] = id;
+        self.layer_ends[end_index] += 1;
+    }
+
+    pub fn truncate_current_layer(&mut self, keep: usize) {
+        let end_index = self.layer_count as usize;
+        let start = self.layer_ends[end_index - 1] as usize;
+        let end = self.layer_ends[end_index] as usize;
+        let keep = keep.min(end - start);
+        self.layer_ends[end_index] = u16::try_from(start + keep).expect("layer fits in u16");
+    }
+
+    pub fn start_new_layer(&mut self) {
+        let next = self.layer_count as usize + 1;
+        self.layer_ends[next] = self.layer_ends[self.layer_count as usize];
+        self.layer_count += 1;
+    }
+
+    pub fn pop_layer(&mut self) {
+        if self.layer_count > 1 {
+            self.layer_count -= 1;
+            self.layer_ends[self.layer_count as usize + 1] =
+                self.layer_ends[self.layer_count as usize];
+        }
+    }
+
+    pub fn surviving_nodes(&self) -> &[BuildNodeId] {
+        &self.layer_ids[..self.current_layer_end()]
     }
 }
 
@@ -290,5 +362,14 @@ impl EnsembleWorkspace {
             build: BuildWorkspace::new(capacity),
             capacity,
         })
+    }
+
+    pub fn sign_batch(&self, batch_size: usize) -> crate::SignBatch<'_> {
+        crate::SignBatch::from_flat(
+            &self.batch_features[..batch_size * self.capacity.source_feature_count],
+            batch_size,
+            self.capacity.source_feature_count,
+            &self.batch_signs[..batch_size],
+        )
     }
 }
