@@ -22,7 +22,7 @@ from .boolean_dgp import (
     sample_function,
 )
 
-GENERATOR_VERSION = "4.0.0-numpy-pcg64dxsm-anf"
+GENERATOR_VERSION = "5.0.0-numpy-pcg64dxsm-clause"
 
 
 def _canonical_json(value: object) -> str:
@@ -54,8 +54,6 @@ class SyntheticStreamConfig:
     p_g: float = 0.0
     p_sample_min_g: float = 1.0
     p_sample_max_g: float = 1.0
-    min_n_terms: int = 1
-    max_n_terms: int = 10
     min_term_degree: int = 1
     max_term_degree: int = 7
     p_negated_literal: float = 0.5
@@ -71,8 +69,6 @@ class SyntheticStreamConfig:
             "n_features",
             "n_functions",
             "q_max",
-            "min_n_terms",
-            "max_n_terms",
             "min_term_degree",
             "max_term_degree",
         )
@@ -94,8 +90,6 @@ class SyntheticStreamConfig:
             raise ValueError("probabilities must lie in [0, 1]")
         if self.w_min > self.w_max or self.b_min > self.b_max or self.noise_std < 0:
             raise ValueError("invalid scale range or noise standard deviation")
-        if not 1 <= self.min_n_terms <= self.max_n_terms:
-            raise ValueError("invalid ANF term-count range")
         if not 1 <= self.min_term_degree <= self.max_term_degree <= self.n_features:
             raise ValueError("invalid term degree range")
 

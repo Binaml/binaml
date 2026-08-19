@@ -96,8 +96,6 @@ def _tiny_regression_scenario(tmp_path) -> object:
                 "environment": {
                     "n_features": 3,
                     "n_functions": 1,
-                    "min_n_terms": 1,
-                    "max_n_terms": 3,
                     "min_term_degree": 1,
                     "max_term_degree": 3,
                 },

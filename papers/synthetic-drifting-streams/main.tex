@@ -115,11 +115,8 @@ performance report.
   \item[$y_t,\tilde y_t$] Noiseless and observed regression targets.
   \item[$b_t,\epsilon_t,\sigma$] Intercept, observation noise, and its standard deviation.
   \item[$f_i:\{0,1\}^d\to\{0,1\},w_i$] Fixed binary indicator function and its fixed weight.
-  \item[$k_i,I_i$] Function arity and ordered selected-feature indices.
-  \item[$h_i$] Hamming threshold.
-  \item[$p_{\mathrm{table}},k_{\mathrm{table,max}}$] Truth-table family probability and maximum arity.
-  \item[$k_{\mathrm{threshold,min}},k_{\mathrm{threshold,max}}$] Hamming-threshold arity bounds.
-  \item[$p_{\mathrm{activation,min}},p_{\mathrm{activation,max}}$] Truth-table activation-probability range.
+  \item[$k_i,I_i,\nu_i$] Clause degree, ordered selected-feature indices, and per-literal negation flags.
+  \item[$k_{\min},k_{\max},p_{\neg}$] Clause degree bounds and negated-literal probability.
   \item[$q_{\max},p_{\min},p_{\max}$] Maximum parent count and CPT range.
   \item[$p_x,p_{\mathrm{sample,min}}^x,p_{\mathrm{sample,max}}^x$] Input distribution-sampling probability and node-sampling-probability range.
   \item[$p_g,p_{\mathrm{sample,min}}^g,p_{\mathrm{sample,max}}^g$] Gate distribution-sampling probability and node-sampling-probability range.
@@ -146,58 +143,35 @@ y_t=b_t+\sum_{i=1}^{m}w_i g_{t,i}f_i(x_t),
 \tilde y_t=y_t+\epsilon_t,
 \]
 where $\epsilon_t$ is zero-mean Gaussian noise.  This form asks models to
-discover structure in input bits.  With enough boolean components it can in
-theory approximate arbitrary functions on binary inputs, while activity gates
-provide controllable levels of concept drift without rewriting the underlying
-components.  Each $f_i:\{0,1\}^d\to\{0,1\}$ is a binary indicator
-(boolean component) represented by either a truth table or a Hamming threshold
-over a selected subset of input-bit indices.  Truth tables and Hamming
-thresholds are simple, exact boolean generators with controllable arity and
-sparsity: tables stress arbitrary local interactions; thresholds stress
-monotone count structure.  Together they cover more than one boolean style
-without a huge data-generating process.  The selected-bit order is significant:
-the first bit is the most-significant bit in the truth-table index.
+discover structure in input bits.  Activity gates provide controllable levels
+of concept drift without rewriting the underlying components.  Each
+$f_i:\{0,1\}^d\to\{0,1\}$ is a binary indicator (boolean component) defined
+as one conjunction of literals over a selected subset of input bits: each
+literal is either a coordinate or its negation, and all selected literals must
+be satisfied for $f_i(x)=1$.
 
 \paragraph{Fixed target construction.}
-For each component, sample the truth-table family with probability
-$p_{\mathrm{table}}$:
+For each component, draw the clause degree
 \[
- C_i\sim\operatorname{Bernoulli}(p_{\mathrm{table}}).
+ k_i\sim\operatorname{DiscreteUniform}
+ \{k_{\min},\ldots,k_{\max}\},
 \]
-If $C_i=1$, draw
+sample distinct input indices
 \[
-\begin{aligned}
- k_i &\sim\operatorname{DiscreteUniform}
-       \{1,\ldots,k_{\mathrm{table,max}}\},\\
- I_i &\sim\operatorname{Uniform}\!\left(
-       \binom{\{1,\ldots,d\}}{k_i}\right),\\
- p_{\mathrm{activation},i} &\sim\operatorname{Uniform}
-       (p_{\mathrm{activation,min}},p_{\mathrm{activation,max}}),
-\end{aligned}
+ I_i\sim\operatorname{Uniform}\!\left(
+ \binom{\{1,\ldots,d\}}{k_i}\right),
 \]
-where $k_{\mathrm{table,max}}$ is the maximum truth-table arity.
-Sample its $2^{k_i}$ lookup-table entries independently from
-$\operatorname{Bernoulli}(p_{\mathrm{activation},i})$.  The ordered selected
-bit values index the table.
-If $C_i=0$, draw
+and, independently for each selected index, draw a negation flag
 \[
-\begin{aligned}
- k_i &\sim\operatorname{DiscreteUniform}
-       \{k_{\mathrm{threshold,min}},\ldots,
-         k_{\mathrm{threshold,max}}\},\\
- I_i &\sim\operatorname{Uniform}\!\left(
-       \binom{\{1,\ldots,d\}}{k_i}\right),\\
- h_i &\sim\operatorname{DiscreteUniform}\{1,\ldots,k_i\},
-\end{aligned}
+ \nu_{i,\ell}\sim\operatorname{Bernoulli}(p_{\neg})
+ \qquad (\ell=1,\ldots,k_i).
 \]
-where $k_{\mathrm{threshold,min}}$ and
-$k_{\mathrm{threshold,max}}$ are the configured minimum and maximum
-Hamming-threshold arities.  The component is
+The component is
 \[
- f_i(x)=\mathbf{1}\!\left\{
- \sum_{\ell=1}^{k_i}x_{I_{i,\ell}}\geq h_i
- \right\}.
+ f_i(x)=\bigwedge_{\ell=1}^{k_i}\ell_{i,\ell}(x),
 \]
+where $\ell_{i,\ell}(x)=x_{I_{i,\ell}}$ if $\nu_{i,\ell}=0$ and
+$\ell_{i,\ell}(x)=\neg x_{I_{i,\ell}}$ otherwise.
 Weights are sampled once, for example
 $w_i\sim\operatorname{Uniform}(w_{\min},w_{\max})$, and remain fixed for the
 trajectory.  The initial intercept is
@@ -268,10 +242,9 @@ again.
   \item[\textbf{Run}] Root seed $\xi$ determines all random draws; $d$ and
   $m$ set the input width and number of target components; $\sigma$ sets the
   observation-noise standard deviation.
-  \item[\textbf{Function}] $p_{\mathrm{table}}$, $k_{\mathrm{table,max}}$,
-  $k_{\mathrm{threshold,min}}$, $k_{\mathrm{threshold,max}}$,
-  $p_{\mathrm{activation,min}}$, and $p_{\mathrm{activation,max}}$ determine
-  the function family, its arity bounds, and truth-table entry probabilities.
+  \item[\textbf{Function}] $k_{\min}$, $k_{\max}$, and $p_{\neg}$ determine
+  the clause degree bounds and the probability that each selected literal is
+  negated.
   \item[\textbf{Distribution structure}] Parent limit $q_{\max}$ and CPT
   range $[p_{\min},p_{\max}]$ bound each input and gate DAG's parents and
   conditional probabilities.
@@ -330,7 +303,7 @@ is never supplied to a model.
 
 \section{Multiclass classification task}
 The classification variant reuses the observed binary input stream
-$x_t\in\{0,1\}^d$ and the same boolean function family
+$x_t\in\{0,1\}^d$ and the same conjunction-of-literals function family
 $f_j:\{0,1\}^d\to\{0,1\}$ sampled once at initialization.  For each class
 $c\in\{0,\ldots,K-1\}$, the environment maintains hidden activity gates
 $g_{t,c}\in\{0,1\}^m$, intercept $b_{t,c}$, and weights $w_{c,j}$ sampled

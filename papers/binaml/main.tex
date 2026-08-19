@@ -509,18 +509,16 @@ benchmark directory.
 \subsection{Regression}
 The regression task uses 1,000 observations and seeds
 $\{0,1,2,3,4\}$ with 32 input bits,
-10 fixed target components $f_k(x)$ sampled as ANF functions
-(XOR of one to ten conjunction terms with one to 32 literals each, plus a
-random constant bit), noise standard deviation $0.1$, and the same
+10 fixed target components $f_k(x)$ sampled as conjunctions of one to 32
+literals each, noise standard deviation $0.1$, and the same
 function, DAG, and target-scale settings.  Input bits are resampled from the
 input DAG every step ($p_{\mathrm{sample},x}=1$); gate bits use partial
 resampling ($p_{\mathrm{sample},g}=0.2$).  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 Scenario \texttt{default.json} uses ten components; the lighter
-\texttt{single\_function.json} variant uses one component sampled as a single
-monomial (one conjunction of one to 32 literals, plus a random constant bit);
-\texttt{single\_function\_high\_arity.json} uses one component sampled as a
-single monomial with three to seven literals.  Scenario
+\texttt{single\_function.json} variant uses one such component with one to 32
+literals; \texttt{single\_function\_high\_arity.json} uses one component with
+three to seven literals.  Scenario
 \texttt{default\_no\_drift.json} matches the default regression setup with
 drift probabilities set to zero.
 
@@ -549,10 +547,10 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.282\pm0.034$ & $0.526\pm0.034$ & $\boldsymbol{0.046\pm0.000}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.248\pm0.027}$ & $\boldsymbol{0.494\pm0.029}$ & $1.896\pm0.116$ \\
-MLP SGD (JAX) & $0.264\pm0.030$ & $0.510\pm0.031$ & $3.641\pm0.193$ \\
-Last target & $0.310\pm0.058$ & $0.546\pm0.057$ & $0.038\pm0.010$ \\
+BRegressor (ours) & $0.076\pm0.015$ & $0.270\pm0.029$ & $0.051\pm0.005$ \\
+Linear SGD (JAX) & $0.068\pm0.012$ & $0.256\pm0.026$ & $2.172\pm0.190$ \\
+MLP SGD (JAX) & $0.069\pm0.014$ & $0.255\pm0.030$ & $3.849\pm0.269$ \\
+Last target & $0.078\pm0.020$ & $0.270\pm0.037$ & $0.033\pm0.002$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -567,16 +565,16 @@ $p_x=p_g=p_b=0$ and fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.123\pm0.038$ & $0.328\pm0.063$ & $\boldsymbol{0.031\pm0.001}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.079\pm0.022}$ & $\boldsymbol{0.265\pm0.045}$ & $1.347\pm0.010$ \\
-MLP SGD (JAX) & $0.136\pm0.043$ & $0.343\pm0.068$ & $2.849\pm0.085$ \\
-Last target & $0.288\pm0.108$ & $0.479\pm0.121$ & $0.020\pm0.000$ \\
+BRegressor (ours) & $0.047\pm0.014$ & $0.207\pm0.033$ & $0.037\pm0.002$ \\
+Linear SGD (JAX) & $0.033\pm0.009$ & $0.176\pm0.025$ & $1.330\pm0.081$ \\
+MLP SGD (JAX) & $0.052\pm0.015$ & $0.217\pm0.035$ & $2.417\pm0.092$ \\
+Last target & $0.077\pm0.028$ & $0.255\pm0.054$ & $0.022\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
 
 A lighter variant in \texttt{benchmarks/scenarios/single\_function.json}
-uses the same settings with one fixed monomial $f_0$ instead of ten ANF
+uses the same settings with one fixed conjunction $f_0$ instead of ten
 components.
 
 \begin{center}
@@ -585,16 +583,16 @@ components.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.047\pm0.006$ & $0.215\pm0.014$ & $0.042\pm0.001$ \\
-Linear SGD (JAX) & $0.045\pm0.006$ & $0.210\pm0.014$ & $1.858\pm0.066$ \\
-MLP SGD (JAX) & $0.051\pm0.006$ & $0.225\pm0.012$ & $3.831\pm0.151$ \\
-Last target & $\boldsymbol{0.034\pm0.005}$ & $\boldsymbol{0.183\pm0.012}$ & $\boldsymbol{0.027\pm0.001}$ \\
+BRegressor (ours) & $0.043\pm0.007$ & $0.204\pm0.017$ & $0.033\pm0.005$ \\
+Linear SGD (JAX) & $0.050\pm0.007$ & $0.220\pm0.017$ & $1.055\pm0.033$ \\
+MLP SGD (JAX) & $0.034\pm0.006$ & $0.183\pm0.014$ & $1.958\pm0.016$ \\
+Last target & $0.034\pm0.006$ & $0.181\pm0.016$ & $0.019\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
 
 The high-arity variant in \texttt{benchmarks/scenarios/single\_function\_high\_arity.json}
-uses the same settings with one fixed monomial $f_0$ whose clause has three to
+uses the same settings with one fixed conjunction $f_0$ whose clause has three to
 seven literals.
 
 \begin{center}
@@ -603,17 +601,17 @@ seven literals.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.044\pm0.005$ & $0.209\pm0.011$ & $0.044\pm0.003$ \\
-Linear SGD (JAX) & $0.043\pm0.004$ & $0.207\pm0.010$ & $1.871\pm0.074$ \\
-MLP SGD (JAX) & $0.049\pm0.004$ & $0.221\pm0.010$ & $3.480\pm0.144$ \\
-Last target & $\boldsymbol{0.033\pm0.004}$ & $\boldsymbol{0.180\pm0.010}$ & $\boldsymbol{0.029\pm0.000}$ \\
+BRegressor (ours) & $0.050\pm0.006$ & $0.222\pm0.012$ & $0.041\pm0.008$ \\
+Linear SGD (JAX) & $0.055\pm0.006$ & $0.234\pm0.012$ & $1.296\pm0.078$ \\
+MLP SGD (JAX) & $0.040\pm0.004$ & $0.199\pm0.010$ & $2.641\pm0.168$ \\
+Last target & $0.040\pm0.005$ & $0.197\pm0.012$ & $0.024\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
 
 \subsection{Classification}
 The classification task uses the same input width, component count, noise
-standard deviation, drift probabilities, and $f_k$ ANF settings as the
+standard deviation, drift probabilities, and $f_k$ clause settings as the
 regression default, with ten classes and per-class gates, weights, and
 intercepts.  Binary classification is the same generator with
 \texttt{n\_classes=2}; a dedicated scenario pins one $f_0$ and fixed
@@ -647,10 +645,10 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.542\pm0.038$ & $\boldsymbol{0.097\pm0.007}$ \\
-Linear SGD (JAX) & $0.550\pm0.041$ & $1.867\pm0.125$ \\
-MLP SGD (JAX) & $0.548\pm0.048$ & $3.227\pm0.076$ \\
-Last target & $\boldsymbol{0.560\pm0.051}$ & $0.026\pm0.005$ \\
+BClassifier (ours) & $0.626\pm0.028$ & $0.059\pm0.005$ \\
+Linear SGD (JAX) & $0.652\pm0.022$ & $1.088\pm0.074$ \\
+MLP SGD (JAX) & $0.646\pm0.020$ & $1.914\pm0.071$ \\
+Last target & $0.623\pm0.026$ & $0.013\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -666,17 +664,17 @@ fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.683\pm0.069$ & $\boldsymbol{0.073\pm0.003}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.786\pm0.050}$ & $1.289\pm0.042$ \\
-MLP SGD (JAX) & $0.739\pm0.061$ & $2.467\pm0.151$ \\
-Last target & $0.607\pm0.080$ & $0.015\pm0.000$ \\
+BClassifier (ours) & $0.650\pm0.123$ & $0.062\pm0.002$ \\
+Linear SGD (JAX) & $0.741\pm0.102$ & $1.157\pm0.027$ \\
+MLP SGD (JAX) & $0.688\pm0.115$ & $2.186\pm0.027$ \\
+Last target & $0.590\pm0.142$ & $0.015\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
 
 The single-function variant in
 \texttt{benchmarks/scenarios/single\_function\_multiclass.json} uses one fixed
-monomial $f_0$ with the same multiclass head sampling as the default.
+conjunction $f_0$ with the same multiclass head sampling as the default.
 
 \begin{center}
 \footnotesize
@@ -684,17 +682,17 @@ monomial $f_0$ with the same multiclass head sampling as the default.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.654\pm0.035$ & $\boldsymbol{0.076\pm0.001}$ \\
-Linear SGD (JAX) & $0.659\pm0.042$ & $1.635\pm0.074$ \\
-MLP SGD (JAX) & $\boldsymbol{0.663\pm0.038}$ & $3.375\pm0.131$ \\
-Last target & $0.652\pm0.038$ & $0.018\pm0.000$ \\
+BClassifier (ours) & $0.668\pm0.022$ & $0.060\pm0.001$ \\
+Linear SGD (JAX) & $0.676\pm0.022$ & $1.132\pm0.028$ \\
+MLP SGD (JAX) & $0.680\pm0.021$ & $2.113\pm0.037$ \\
+Last target & $0.668\pm0.022$ & $0.015\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
 
 The high-arity variant in
 \texttt{benchmarks/scenarios/single\_function\_high\_arity\_multiclass.json}
-uses one fixed monomial $f_0$ whose clause has three to seven literals.
+uses one fixed conjunction $f_0$ whose clause has three to seven literals.
 
 \begin{center}
 \footnotesize
@@ -702,10 +700,10 @@ uses one fixed monomial $f_0$ whose clause has three to seven literals.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.666\pm0.025$ & $\boldsymbol{0.090\pm0.014}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.676\pm0.027}$ & $1.655\pm0.094$ \\
-MLP SGD (JAX) & $0.676\pm0.027$ & $3.124\pm0.116$ \\
-Last target & $0.676\pm0.027$ & $0.021\pm0.001$ \\
+BClassifier (ours) & $0.655\pm0.025$ & $0.061\pm0.001$ \\
+Linear SGD (JAX) & $0.674\pm0.023$ & $1.150\pm0.022$ \\
+MLP SGD (JAX) & $0.676\pm0.022$ & $2.117\pm0.033$ \\
+Last target & $0.658\pm0.024$ & $0.015\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}

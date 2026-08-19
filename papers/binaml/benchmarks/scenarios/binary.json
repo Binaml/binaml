@@ -23,8 +23,6 @@
     "p_sample_max_x": 1,
     "p_sample_min_g": 1,
     "p_sample_max_g": 1,
-    "min_n_terms": 1,
-    "max_n_terms": 10,
     "min_term_degree": 1,
     "max_term_degree": 32,
     "p_negated_literal": 0.5,

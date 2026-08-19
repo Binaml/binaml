@@ -18,8 +18,6 @@ class BooleanDgpConfig:
     p_max: float = 0.95
     p_sample_min_x: float = 1.0
     p_sample_max_x: float = 1.0
-    min_n_terms: int = 1
-    max_n_terms: int = 10
     min_term_degree: int = 1
     max_term_degree: int = 7
     p_negated_literal: float = 0.5
@@ -28,8 +26,6 @@ class BooleanDgpConfig:
         integer_fields = (
             "n_features",
             "q_max",
-            "min_n_terms",
-            "max_n_terms",
             "min_term_degree",
             "max_term_degree",
         )
@@ -48,8 +44,6 @@ class BooleanDgpConfig:
             raise ValueError("probability ranges must lie in [0, 1]")
         if not 0 <= self.p_negated_literal <= 1:
             raise ValueError("probabilities must lie in [0, 1]")
-        if not 1 <= self.min_n_terms <= self.max_n_terms:
-            raise ValueError("invalid ANF term-count range")
         if not 1 <= self.min_term_degree <= self.max_term_degree <= self.n_features:
             raise ValueError("invalid term degree range")
 
@@ -70,8 +64,6 @@ class BooleanDgpConfig:
             p_max=config.p_max,  # type: ignore[attr-defined]
             p_sample_min_x=config.p_sample_min_x,  # type: ignore[attr-defined]
             p_sample_max_x=config.p_sample_max_x,  # type: ignore[attr-defined]
-            min_n_terms=config.min_n_terms,  # type: ignore[attr-defined]
-            max_n_terms=config.max_n_terms,  # type: ignore[attr-defined]
             min_term_degree=config.min_term_degree,  # type: ignore[attr-defined]
             max_term_degree=config.max_term_degree,  # type: ignore[attr-defined]
             p_negated_literal=config.p_negated_literal,  # type: ignore[attr-defined]
@@ -84,7 +76,7 @@ class BooleanDgpConfig:
 
 @dataclass(frozen=True)
 class ConjunctionTerm:
-    """One ANF monomial: conjunction of literals."""
+    """One conjunction of literals."""
 
     feature_indices: tuple[int, ...]
     negated: tuple[bool, ...]
@@ -114,33 +106,23 @@ class ConjunctionTerm:
 
 @dataclass(frozen=True)
 class FunctionSpec:
-    """Ground-truth f_k as ANF: constant ⊕ XOR of conjunction terms."""
+    """Ground-truth f_k as one conjunction of literals."""
 
-    constant: bool
-    terms: tuple[ConjunctionTerm, ...]
+    term: ConjunctionTerm
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "constant": self.constant,
-            "terms": [term.to_dict() for term in self.terms],
-        }
+        return self.term.to_dict()
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> FunctionSpec:
         if "family" in value:
             raise ValueError("unsupported legacy function spec with family field")
-        if "feature_indices" in value and "terms" not in value:
-            raise ValueError("unsupported legacy flat formula spec")
-        return cls(
-            bool(value["constant"]),
-            tuple(ConjunctionTerm.from_dict(term) for term in value["terms"]),
-        )
+        if "constant" in value or "terms" in value:
+            raise ValueError("unsupported legacy ANF function spec")
+        return cls(ConjunctionTerm.from_dict(value))
 
     def evaluate(self, x: np.ndarray) -> int:
-        value = int(self.constant)
-        for term in self.terms:
-            value ^= term.evaluate(x)
-        return value
+        return self.term.evaluate(x)
 
 
 @dataclass(frozen=True)
@@ -187,10 +169,7 @@ def sample_conjunction_term(rng: np.random.Generator, config: BooleanDgpConfig) 
 
 
 def sample_function(rng: np.random.Generator, config: BooleanDgpConfig) -> FunctionSpec:
-    n_terms = int(rng.integers(config.min_n_terms, config.max_n_terms + 1))
-    constant = bool(rng.integers(0, 2))
-    terms = tuple(sample_conjunction_term(rng, config) for _ in range(n_terms))
-    return FunctionSpec(constant, terms)
+    return FunctionSpec(sample_conjunction_term(rng, config))
 
 
 def sample_conditional_dag(

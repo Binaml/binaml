@@ -420,7 +420,7 @@ def tune_task(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", choices=("regression", "classification", "all"), default="all")
-    parser.add_argument("--output-dir", type=Path, default=Path("runs/tuning_anf"))
+    parser.add_argument("--output-dir", type=Path, default=Path("runs/tuning"))
     parser.add_argument(
         "--regression-scenario",
         type=Path,

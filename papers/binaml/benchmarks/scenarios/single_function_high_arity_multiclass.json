@@ -1,7 +1,13 @@
 {
   "name": "single_function_high_arity_multiclass",
   "n_samples": 1000,
-  "seeds": [0, 1, 2, 3, 4],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
   "warmup_samples": 100,
   "environment": {
     "n_features": 32,
@@ -16,8 +22,6 @@
     "p_g": 0.01,
     "p_sample_min_g": 0.2,
     "p_sample_max_g": 0.2,
-    "min_n_terms": 1,
-    "max_n_terms": 1,
     "min_term_degree": 3,
     "max_term_degree": 7,
     "p_negated_literal": 0.5,
