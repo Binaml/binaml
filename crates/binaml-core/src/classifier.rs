@@ -53,8 +53,8 @@ impl BClassifier {
     pub fn with_hyperparameters(
         source_feature_count: usize,
         n_classes: usize,
-        learning_rate: f64,
-        l2: f64,
+        learning_rate: f32,
+        l2: f32,
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
@@ -89,12 +89,12 @@ impl BClassifier {
     }
 
     #[must_use]
-    pub fn intercept(&self, class_index: usize) -> Option<f64> {
+    pub fn intercept(&self, class_index: usize) -> Option<f32> {
         self.ensemble.head.intercepts.get(class_index).copied()
     }
 
     #[must_use]
-    pub fn weight(&self, function_index: usize, class_index: usize) -> Option<f64> {
+    pub fn weight(&self, function_index: usize, class_index: usize) -> Option<f32> {
         if function_index >= self.ensemble.head.active
             || class_index >= self.ensemble.head.n_classes
         {

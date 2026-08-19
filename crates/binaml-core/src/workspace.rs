@@ -302,7 +302,7 @@ pub(crate) struct EnsembleWorkspace {
     pub pending_features: Box<[bool]>,
     pub pending_function_values: Box<[bool]>,
     pub eval_scratch: Box<[bool]>,
-    pub logits: Box<[f64]>,
+    pub logits: Box<[f32]>,
     pub batch_features: Box<[bool]>,
     pub batch_signs: Box<[bool]>,
     pub batch_len: usize,

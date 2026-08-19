@@ -8,9 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::time::Instant;
 
-const DEFAULT_LEARNING_RATE: f64 = 0.03;
-const DEFAULT_L2: f64 = 5e-4;
-const DEFAULT_CLASSIFIER_LEARNING_RATE: f64 = 0.12;
+const DEFAULT_LEARNING_RATE: f32 = 0.03;
+const DEFAULT_L2: f32 = 5e-4;
+const DEFAULT_CLASSIFIER_LEARNING_RATE: f32 = 0.12;
 const DEFAULT_CLASSIFIER_BATCH_SIZE: usize = 12;
 const DEFAULT_CLASSIFIER_SGD_STEPS: usize = 30;
 const DEFAULT_SGD_STEPS: usize = 20;
@@ -198,8 +198,8 @@ impl BRegressorCore {
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
-        learning_rate: f64,
-        l2: f64,
+        learning_rate: f32,
+        l2: f32,
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
@@ -223,18 +223,18 @@ impl BRegressorCore {
         })
     }
 
-    fn predict(&mut self, features: PyReadonlyArray1<'_, u8>) -> PyResult<f64> {
+    fn predict(&mut self, features: PyReadonlyArray1<'_, u8>) -> PyResult<f32> {
         self.model
             .predict(&binary_features(features)?)
             .map_err(model_error)
     }
 
-    fn update(&mut self, target: f64) -> PyResult<()> {
+    fn update(&mut self, target: f32) -> PyResult<()> {
         self.model.update(target).map_err(model_error)
     }
 
     #[getter]
-    fn intercept(&self) -> f64 {
+    fn intercept(&self) -> f32 {
         self.model.intercept()
     }
 
@@ -248,7 +248,7 @@ impl BRegressorCore {
         self.model.function_count()
     }
 
-    fn weight(&self, index: usize) -> Option<f64> {
+    fn weight(&self, index: usize) -> Option<f32> {
         self.model.weight(index)
     }
 }
@@ -266,8 +266,8 @@ impl BClassifierCore {
     fn new(
         source_feature_count: usize,
         n_classes: usize,
-        learning_rate: f64,
-        l2: f64,
+        learning_rate: f32,
+        l2: f32,
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
@@ -312,11 +312,11 @@ impl BClassifierCore {
         self.model.function_count()
     }
 
-    fn intercept(&self, class_index: usize) -> Option<f64> {
+    fn intercept(&self, class_index: usize) -> Option<f32> {
         self.model.intercept(class_index)
     }
 
-    fn weight(&self, function_index: usize, class_index: usize) -> Option<f64> {
+    fn weight(&self, function_index: usize, class_index: usize) -> Option<f32> {
         self.model.weight(function_index, class_index)
     }
 }

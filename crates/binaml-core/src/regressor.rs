@@ -47,8 +47,8 @@ impl BRegressor {
     #[allow(clippy::too_many_arguments)]
     pub fn with_hyperparameters(
         source_feature_count: usize,
-        learning_rate: f64,
-        l2: f64,
+        learning_rate: f32,
+        l2: f32,
         batch_size: usize,
         sgd_steps: usize,
         parent_top_k: usize,
@@ -72,7 +72,7 @@ impl BRegressor {
     }
 
     #[must_use]
-    pub fn intercept(&self) -> f64 {
+    pub fn intercept(&self) -> f32 {
         self.ensemble.head.intercept
     }
 
@@ -87,14 +87,14 @@ impl BRegressor {
     }
 
     #[must_use]
-    pub fn weight(&self, index: usize) -> Option<f64> {
+    pub fn weight(&self, index: usize) -> Option<f32> {
         if index >= self.ensemble.head.active {
             return None;
         }
         Some(self.ensemble.head.weights[index])
     }
 
-    pub fn predict(&mut self, features: &[bool]) -> Result<f64, BRegressorError> {
+    pub fn predict(&mut self, features: &[bool]) -> Result<f32, BRegressorError> {
         self.ensemble.begin_predict(features)?;
         let count = self.ensemble.head.active;
         Ok(self
@@ -103,7 +103,7 @@ impl BRegressor {
             .predict(&self.ensemble.workspace.pending_function_values[..count]))
     }
 
-    pub fn update(&mut self, target: f64) -> Result<(), BRegressorError> {
+    pub fn update(&mut self, target: f32) -> Result<(), BRegressorError> {
         if !target.is_finite() {
             return Err(BRegressorError::NonFiniteTarget);
         }
@@ -120,11 +120,11 @@ mod tests {
             .unwrap()
     }
 
-    fn weights(model: &mut BRegressor) -> &mut [f64] {
+    fn weights(model: &mut BRegressor) -> &mut [f32] {
         &mut model.ensemble.head.weights[..model.ensemble.head.active]
     }
 
-    fn step(model: &mut BRegressor, features: &[bool], target: f64) {
+    fn step(model: &mut BRegressor, features: &[bool], target: f32) {
         model.predict(features).unwrap();
         model.update(target).unwrap();
     }

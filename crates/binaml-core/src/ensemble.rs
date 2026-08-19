@@ -4,8 +4,8 @@ use crate::{FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGr
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EnsembleConfig {
-    pub learning_rate: f64,
-    pub l2: f64,
+    pub learning_rate: f32,
+    pub l2: f32,
     pub sgd_steps: usize,
     pub batch_size: usize,
     pub parent_top_k: usize,
@@ -99,7 +99,7 @@ pub(crate) trait EnsembleHead: std::fmt::Debug {
 
     fn validate_target(&self, target: Self::Target) -> Result<(), EnsembleError>;
     fn batch_sign(&self, target: Self::Target, function_values: &[bool]) -> bool;
-    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f64, l2: f64);
+    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f32, l2: f32);
     fn append_function(&mut self);
     fn remove_function(&mut self, index: usize);
     fn prune_index(&self) -> usize;
@@ -251,8 +251,8 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
 
 #[derive(Debug)]
 pub(crate) struct RegressionHead {
-    pub intercept: f64,
-    pub weights: Box<[f64]>,
+    pub intercept: f32,
+    pub weights: Box<[f32]>,
     pub active: usize,
 }
 
@@ -265,18 +265,18 @@ impl RegressionHead {
         }
     }
 
-    pub fn predict(&self, function_values: &[bool]) -> f64 {
+    pub fn predict(&self, function_values: &[bool]) -> f32 {
         self.intercept
             + function_values
                 .iter()
                 .zip(self.weights.iter().take(self.active))
-                .map(|(value, weight)| weight * f64::from(*value))
-                .sum::<f64>()
+                .map(|(value, weight)| weight * f32::from(*value))
+                .sum::<f32>()
     }
 }
 
 impl EnsembleHead for RegressionHead {
-    type Target = f64;
+    type Target = f32;
 
     fn validate_target(&self, target: Self::Target) -> Result<(), EnsembleError> {
         if target.is_finite() {
@@ -290,7 +290,7 @@ impl EnsembleHead for RegressionHead {
         target - self.predict(function_values) >= 0.0
     }
 
-    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f64, l2: f64) {
+    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f32, l2: f32) {
         let prediction = self.predict(function_values);
         let error = target - prediction;
         let decay = 1.0 - rate * l2;
@@ -304,7 +304,7 @@ impl EnsembleHead for RegressionHead {
             .take(self.active)
             .zip(function_values)
         {
-            *weight += rate * error * f64::from(*value);
+            *weight += rate * error * f32::from(*value);
         }
     }
 
@@ -346,12 +346,12 @@ impl EnsembleHead for RegressionHead {
 #[derive(Debug)]
 pub(crate) struct ClassificationHead {
     pub n_classes: usize,
-    pub intercepts: Box<[f64]>,
-    pub weights: Box<[f64]>,
+    pub intercepts: Box<[f32]>,
+    pub weights: Box<[f32]>,
     pub active: usize,
     pub max_functions: usize,
-    pub logits_scratch: Box<[f64]>,
-    pub probabilities_scratch: Box<[f64]>,
+    pub logits_scratch: Box<[f32]>,
+    pub probabilities_scratch: Box<[f32]>,
 }
 
 impl ClassificationHead {
@@ -367,28 +367,28 @@ impl ClassificationHead {
         }
     }
 
-    pub(crate) fn expert_weights(&self, function_index: usize) -> &[f64] {
+    pub(crate) fn expert_weights(&self, function_index: usize) -> &[f32] {
         let start = function_index * self.n_classes;
         &self.weights[start..start + self.n_classes]
     }
 
-    fn expert_weights_mut(&mut self, function_index: usize) -> &mut [f64] {
+    fn expert_weights_mut(&mut self, function_index: usize) -> &mut [f32] {
         let start = function_index * self.n_classes;
         let end = start + self.n_classes;
         &mut self.weights[start..end]
     }
 
-    pub fn logits_into(&self, function_values: &[bool], logits: &mut [f64]) {
+    pub fn logits_into(&self, function_values: &[bool], logits: &mut [f32]) {
         logits.copy_from_slice(&self.intercepts);
         for (function_index, value) in function_values.iter().enumerate() {
-            let activation = f64::from(*value);
+            let activation = f32::from(*value);
             for (logit, weight) in logits.iter_mut().zip(self.expert_weights(function_index)) {
                 *logit += weight * activation;
             }
         }
     }
 
-    pub fn predict_with_scratch(&self, function_values: &[bool], logits: &mut [f64]) -> usize {
+    pub fn predict_with_scratch(&self, function_values: &[bool], logits: &mut [f32]) -> usize {
         self.logits_into(function_values, logits);
         argmax(logits)
     }
@@ -397,7 +397,7 @@ impl ClassificationHead {
         &self,
         target: usize,
         function_values: &[bool],
-        logits: &mut [f64],
+        logits: &mut [f32],
     ) -> bool {
         self.predict_with_scratch(function_values, logits) != target
     }
@@ -416,15 +416,15 @@ impl EnsembleHead for ClassificationHead {
 
     fn batch_sign(&self, target: Self::Target, function_values: &[bool]) -> bool {
         const MAX_CLASSES: usize = 64;
-        let mut logits = [0.0_f64; MAX_CLASSES];
+        let mut logits = [0.0_f32; MAX_CLASSES];
         assert!(self.n_classes <= MAX_CLASSES);
         self.batch_sign_with_scratch(target, function_values, &mut logits[..self.n_classes])
     }
 
-    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f64, l2: f64) {
+    fn update(&mut self, target: Self::Target, function_values: &[bool], rate: f32, l2: f32) {
         self.logits_scratch.copy_from_slice(&self.intercepts);
         for (function_index, value) in function_values.iter().enumerate() {
-            let activation = f64::from(*value);
+            let activation = f32::from(*value);
             let start = function_index * self.n_classes;
             for class_index in 0..self.n_classes {
                 self.logits_scratch[class_index] += self.weights[start + class_index] * activation;
@@ -433,10 +433,10 @@ impl EnsembleHead for ClassificationHead {
         softmax_into(&self.logits_scratch, &mut self.probabilities_scratch);
         let decay = 1.0 - rate * l2;
         const MAX_CLASSES: usize = 64;
-        let mut errors = [0.0_f64; MAX_CLASSES];
+        let mut errors = [0.0_f32; MAX_CLASSES];
         assert!(self.n_classes <= MAX_CLASSES);
         for (class_index, error) in errors.iter_mut().enumerate().take(self.n_classes) {
-            *error = self.probabilities_scratch[class_index] - f64::from(class_index == target);
+            *error = self.probabilities_scratch[class_index] - f32::from(class_index == target);
         }
         for function_index in 0..self.active {
             for weight in self.expert_weights_mut(function_index) {
@@ -447,7 +447,7 @@ impl EnsembleHead for ClassificationHead {
             *intercept -= rate * errors[class_index];
         }
         for (function_index, value) in function_values.iter().enumerate() {
-            let activation = f64::from(*value);
+            let activation = f32::from(*value);
             for (class_index, weight) in self
                 .expert_weights_mut(function_index)
                 .iter_mut()
@@ -467,7 +467,7 @@ impl EnsembleHead for ClassificationHead {
 
     fn remove_function(&mut self, index: usize) {
         const MAX_CLASSES: usize = 64;
-        let mut temp = [0.0_f64; MAX_CLASSES];
+        let mut temp = [0.0_f32; MAX_CLASSES];
         let n_classes = self.n_classes;
         assert!(n_classes <= MAX_CLASSES);
         for slot in index..self.active - 1 {
@@ -485,13 +485,13 @@ impl EnsembleHead for ClassificationHead {
                 self.expert_weights(left_index)
                     .iter()
                     .map(|weight| weight.abs())
-                    .sum::<f64>()
+                    .sum::<f32>()
                     .total_cmp(
                         &self
                             .expert_weights(right_index)
                             .iter()
                             .map(|weight| weight.abs())
-                            .sum::<f64>(),
+                            .sum::<f32>(),
                     )
                     .then_with(|| left_index.cmp(&right_index))
             })
@@ -503,7 +503,7 @@ impl EnsembleHead for ClassificationHead {
     }
 }
 
-fn argmax(values: &[f64]) -> usize {
+fn argmax(values: &[f32]) -> usize {
     values
         .iter()
         .enumerate()
@@ -512,18 +512,18 @@ fn argmax(values: &[f64]) -> usize {
         .unwrap_or(0)
 }
 
-fn softmax_into(logits: &[f64], probabilities: &mut [f64]) {
-    let max_logit = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+fn softmax_into(logits: &[f32], probabilities: &mut [f32]) {
+    let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     for (probability, logit) in probabilities.iter_mut().zip(logits) {
         *probability = (logit - max_logit).exp();
     }
-    let normalizer = probabilities.iter().sum::<f64>();
+    let normalizer = probabilities.iter().sum::<f32>();
     if normalizer > 0.0 {
         for probability in probabilities {
             *probability /= normalizer;
         }
     } else {
-        let uniform = 1.0 / logits.len() as f64;
+        let uniform = 1.0 / logits.len() as f32;
         probabilities.fill(uniform);
     }
 }
