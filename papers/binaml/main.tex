@@ -524,17 +524,18 @@ single monomial with three to seven literals.  Scenario
 \texttt{default\_no\_drift.json} matches the default regression setup with
 drift probabilities set to zero.
 
-All models receive the scenario width.  \texttt{BRegressor} uses learning rate
-$\eta=1.5\times10^{-2}$, $\ell_2$ decay $2\times10^{-3}$, expert batch size
-$B=5$, thirty-five single-sample SGD steps, parent top-$K_p=8$, pattern length
-$\ell_{\mathrm{pat}}=4$, ensemble capacity $K_{\max}=32$, and $64$ expert nodes per function.  Each learned expert
-enters the linear head as $\hat{f}_k(x)\in\{0,1\}$.  The linear baseline is a
-JAX replay-batch implementation using learning rate $0.02$, decay
-$7.5\times10^{-3}$, replay size $B=1$, four full-batch SGD steps, and uncentered binary
-inputs.  The MLP baseline is a JAX two-layer ReLU network using replay size
-$B=1$ and twenty-four full-batch SGD steps; hidden layers of 32 and 32 units;
-constant learning rate $0.03$, $\alpha=10^{-3}$, and random state zero.  Linear
-and MLP baselines share the same float32 replay SGD scaffold.  The last-target
+All models receive the scenario width.  Model hyperparameters are versioned in
+\texttt{benchmarks/models.json} and \texttt{benchmarks/models\_classification.json}.
+For regression, \texttt{BRegressor} uses learning rate $\eta=3\times10^{-2}$,
+$\ell_2$ decay $7.5\times10^{-3}$, expert batch size $B=8$, thirty-five
+single-sample SGD steps, parent top-$K_p=8$, pattern length
+$\ell_{\mathrm{pat}}=4$, ensemble capacity $K_{\max}=32$, and $64$ expert nodes per function.
+The linear baseline uses learning rate $5\times10^{-3}$, decay $1.5\times10^{-2}$,
+replay size $B=1$, three full-batch SGD steps, and uncentered binary inputs.
+The MLP baseline is a JAX two-layer ReLU network with hidden layers of 32 and 32 units,
+learning rate $7.5\times10^{-2}$, $\alpha=3\times10^{-3}$, replay size $B=1$,
+thirty-one full-batch SGD steps, and random state zero.
+Linear and MLP baselines share the same float32 replay SGD scaffold.  The last-target
 baseline predicts zero on the first observation and thereafter repeats the most
 recently observed target, ignoring the input features.
 
@@ -566,10 +567,10 @@ $p_x=p_g=p_b=0$ and fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.125\pm0.037$ & $0.331\pm0.062$ & $\boldsymbol{0.062\pm0.011}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.094\pm0.026}$ & $\boldsymbol{0.291\pm0.047}$ & $2.388\pm0.083$ \\
-MLP SGD (JAX) & $0.119\pm0.033$ & $0.329\pm0.053$ & $4.436\pm0.182$ \\
-Last target & $0.288\pm0.108$ & $0.479\pm0.121$ & $0.035\pm0.001$ \\
+BRegressor (ours) & $0.123\pm0.038$ & $0.328\pm0.063$ & $\boldsymbol{0.031\pm0.001}$ \\
+Linear SGD (JAX) & $\boldsymbol{0.079\pm0.022}$ & $\boldsymbol{0.265\pm0.045}$ & $1.347\pm0.010$ \\
+MLP SGD (JAX) & $0.136\pm0.043$ & $0.343\pm0.068$ & $2.849\pm0.085$ \\
+Last target & $0.288\pm0.108$ & $0.479\pm0.121$ & $0.020\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -623,13 +624,13 @@ class head weights.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/single\_function\_high\_arity\_multiclass.json},
 \texttt{benchmarks/scenarios/binary.json}, and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
-learning rate $\eta=6\times10^{-2}$, $\ell_2$ decay $3\times10^{-3}$,
-expert batch size $B=4$, twenty-nine single-sample SGD steps, parent top-$K_p=8$,
+learning rate $\eta=9\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$,
+expert batch size $B=8$, thirty-nine single-sample SGD steps, parent top-$K_p=8$,
 pattern length $\ell_{\mathrm{pat}}=4$,
-ensemble capacity $K_{\max}=40$, and $32$ expert nodes per function.  The linear classifier baseline uses
-learning rate $0.02$, replay size $B=1$, and eight SGD steps; the MLP classifier
+ensemble capacity $K_{\max}=40$, and $32$ expert nodes per function.  The linear classifier uses
+learning rate $5\times10^{-3}$, no weight decay, replay size $B=1$, and seven SGD steps; the MLP classifier
 baseline uses three ReLU hidden layers of 50, 32, and 16 units, learning rate
-$0.015$, no weight decay, replay size $B=1$, and eight SGD steps, both with
+$5\times10^{-3}$, $\alpha=2.5\times10^{-4}$, replay size $B=1$, and nine SGD steps, both with
 softmax cross-entropy.  The last-target baseline uses the same rule as in
 regression, predicting class zero initially.  Reported
 comparisons use prequential accuracy over the same seed set after optional
@@ -665,10 +666,10 @@ fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.685\pm0.071$ & $\boldsymbol{0.109\pm0.016}$ \\
-Linear SGD (JAX) & $\boldsymbol{0.762\pm0.062}$ & $1.507\pm0.055$ \\
-MLP SGD (JAX) & $0.736\pm0.061$ & $3.112\pm0.151$ \\
-Last target & $0.607\pm0.080$ & $0.020\pm0.000$ \\
+BClassifier (ours) & $0.683\pm0.069$ & $\boldsymbol{0.073\pm0.003}$ \\
+Linear SGD (JAX) & $\boldsymbol{0.786\pm0.050}$ & $1.289\pm0.042$ \\
+MLP SGD (JAX) & $0.739\pm0.061$ & $2.467\pm0.151$ \\
+Last target & $0.607\pm0.080$ & $0.015\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}

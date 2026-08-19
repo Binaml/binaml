@@ -4,14 +4,14 @@
       "factory": "binaml.models:BClassifier",
       "name": "BClassifier",
       "parameters": {
-        "batch_size": 4,
-        "l2": 0.003,
+        "batch_size": 8,
+        "l2": 0.0005,
         "l_pat": 4,
-        "learning_rate": 0.06,
+        "learning_rate": 0.09,
         "max_expert_nodes": 32,
         "max_functions": 40,
         "parent_top_k": 8,
-        "sgd_steps": 29
+        "sgd_steps": 39
       }
     },
     {
@@ -20,25 +20,25 @@
       "parameters": {
         "batch_size": 1,
         "center_binary_features": false,
-        "l2": 0.001,
-        "learning_rate": 0.02,
-        "sgd_steps": 8
+        "l2": 0.0,
+        "learning_rate": 0.005,
+        "sgd_steps": 7
       }
     },
     {
       "factory": "binaml.models:MLPClassifier",
       "name": "MLPClassifier",
       "parameters": {
-        "alpha": 0.0,
+        "alpha": 0.00025,
         "batch_size": 1,
         "hidden_layer_sizes": [
           50,
           32,
           16
         ],
-        "learning_rate": 0.015,
+        "learning_rate": 0.005,
         "random_state": 0,
-        "sgd_steps": 8
+        "sgd_steps": 9
       }
     },
     {

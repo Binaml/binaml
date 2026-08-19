@@ -4,10 +4,10 @@
       "factory": "binaml.models:BRegressor",
       "name": "BRegressor",
       "parameters": {
-        "batch_size": 5,
-        "l2": 0.002,
+        "batch_size": 8,
+        "l2": 0.0075,
         "l_pat": 4,
-        "learning_rate": 0.015,
+        "learning_rate": 0.03,
         "max_expert_nodes": 64,
         "max_functions": 32,
         "parent_top_k": 8,
@@ -20,24 +20,24 @@
       "parameters": {
         "batch_size": 1,
         "center_binary_features": false,
-        "l2": 0.0075,
-        "learning_rate": 0.02,
-        "sgd_steps": 4
+        "l2": 0.015,
+        "learning_rate": 0.005,
+        "sgd_steps": 3
       }
     },
     {
       "factory": "binaml.models:MLPRegressor",
       "name": "MLPRegressor",
       "parameters": {
-        "alpha": 0.001,
+        "alpha": 0.003,
         "batch_size": 1,
         "hidden_layer_sizes": [
           32,
           32
         ],
-        "learning_rate": 0.03,
+        "learning_rate": 0.075,
         "random_state": 0,
-        "sgd_steps": 24
+        "sgd_steps": 31
       }
     },
     {
