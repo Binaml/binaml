@@ -75,7 +75,7 @@ class BooleanDgpConfig:
             p_sample_min_x=config.p_sample_min_x,  # type: ignore[attr-defined]
             p_sample_max_x=config.p_sample_max_x,  # type: ignore[attr-defined]
             truth_table_function_probability=config.truth_table_function_probability,  # type: ignore[attr-defined]
-            min_truth_table_function_arity=getattr(config, "min_truth_table_function_arity", 1),
+            min_truth_table_function_arity=config.min_truth_table_function_arity,  # type: ignore[attr-defined]
             max_truth_table_function_arity=config.max_truth_table_function_arity,  # type: ignore[attr-defined]
             min_hamming_threshold_function_arity=config.min_hamming_threshold_function_arity,  # type: ignore[attr-defined]
             max_hamming_threshold_function_arity=config.max_hamming_threshold_function_arity,  # type: ignore[attr-defined]

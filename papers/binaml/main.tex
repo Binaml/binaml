@@ -509,16 +509,18 @@ benchmark directory.
 \subsection{Regression}
 The regression task uses 1,000 observations and seeds
 $\{0,1,2,3,4\}$ with 32 input bits,
-12 fixed target components, noise standard deviation $0.1$, and the same
+20 fixed target components sampled as truth-table functions on two to four
+input bits, noise standard deviation $0.1$, and the same
 function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
-$\eta=4\times10^{-2}$, $\ell_2$ decay $2\times10^{-3}$, expert batch size
-$B=4$, thirty-five single-sample SGD steps, parent top-$K_p=4$, ensemble capacity $K_{\max}=48$, and $64$ expert nodes per function.  Each expert
+$\eta=5\times10^{-2}$, $\ell_2$ decay $5\times10^{-3}$, expert batch size
+$B=4$, thirty-five single-sample SGD steps, parent top-$K_p=8$, pattern length
+$\ell_{\mathrm{pat}}=4$, ensemble capacity $K_{\max}=48$, and $64$ expert nodes per function.  Each expert
 enters the linear head as $f_k(x)\in\{0,1\}$.  The linear baseline is a
 JAX replay-batch implementation using learning rate $0.01$, decay
-$10^{-4}$, replay size $B=1$, one full-batch SGD step, and uncentered binary
+$10^{-2}$, replay size $B=1$, six full-batch SGD steps, and uncentered binary
 inputs.  The MLP baseline is a JAX two-layer ReLU network using replay size
 $B=1$ and three full-batch SGD steps; hidden layers of 100 and 100 units;
 constant learning rate $0.015$, $\alpha=10^{-3}$, and random state zero.  Linear
@@ -534,9 +536,9 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.367\pm0.012$ & $0.606\pm0.010$ & $\boldsymbol{0.024\pm0.000}$ \\
-Linear SGD (JAX) & $0.486\pm0.009$ & $0.697\pm0.006$ & $1.120\pm0.018$ \\
-MLP SGD (JAX) & $0.362\pm0.003$ & $\boldsymbol{0.602\pm0.003}$ & $2.208\pm0.037$ \\
+BRegressor (ours) & $0.597\pm0.035$ & $0.771\pm0.023$ & $\boldsymbol{0.027\pm0.000}$ \\
+Linear SGD (JAX) & $\boldsymbol{0.583\pm0.037}$ & $\boldsymbol{0.762\pm0.024}$ & $1.306\pm0.006$ \\
+MLP SGD (JAX) & $0.592\pm0.031$ & $0.768\pm0.020$ & $2.486\pm0.061$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -548,8 +550,9 @@ regression default, with three classes and per-class gates, weights, and
 intercepts.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/default\_multiclass.json} and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
-learning rate $\eta=2.2\times10^{-1}$, $\ell_2$ decay $5\times10^{-4}$,
-expert batch size $B=8$, twenty single-sample SGD steps, parent top-$K_p=16$,
+learning rate $\eta=1.2\times10^{-1}$, $\ell_2$ decay $10^{-3}$,
+expert batch size $B=8$, thirty single-sample SGD steps, parent top-$K_p=8$,
+pattern length $\ell_{\mathrm{pat}}=4$,
 ensemble capacity $K_{\max}=64$, and $32$ expert nodes per function.  The linear classifier baseline uses
 learning rate $0.035$, replay size $B=1$, and six SGD steps; the MLP classifier
 baseline uses three ReLU hidden layers of 50, 32, and 16 units, learning rate
@@ -569,9 +572,9 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.768\pm0.021$ & $\boldsymbol{0.045\pm0.001}$ \\
-Linear SGD (JAX) & $0.764\pm0.021$ & $0.951\pm0.005$ \\
-MLP SGD (JAX) & $0.764\pm0.024$ & $1.990\pm0.221$ \\
+BClassifier (ours) & $\boldsymbol{0.740\pm0.019}$ & $\boldsymbol{0.060\pm0.000}$ \\
+Linear SGD (JAX) & $0.737\pm0.019$ & $0.938\pm0.024$ \\
+MLP SGD (JAX) & $0.731\pm0.021$ & $1.957\pm0.066$ \\
 \hline
 \end{tabular}
 \end{center}

@@ -42,6 +42,7 @@ class SyntheticClassificationStreamConfig:
     p_sample_min_g: float = 1.0
     p_sample_max_g: float = 1.0
     truth_table_function_probability: float = 1.0
+    min_truth_table_function_arity: int = 1
     max_truth_table_function_arity: int = 3
     min_hamming_threshold_function_arity: int = 1
     max_hamming_threshold_function_arity: int = 3
@@ -61,6 +62,7 @@ class SyntheticClassificationStreamConfig:
             "n_functions",
             "n_classes",
             "q_max",
+            "min_truth_table_function_arity",
             "max_truth_table_function_arity",
             "min_hamming_threshold_function_arity",
             "max_hamming_threshold_function_arity",
@@ -84,8 +86,8 @@ class SyntheticClassificationStreamConfig:
             raise ValueError("probabilities must lie in [0, 1]")
         if self.w_min > self.w_max or self.b_min > self.b_max or self.noise_std < 0:
             raise ValueError("invalid scale range or noise standard deviation")
-        if not 1 <= self.max_truth_table_function_arity <= self.n_features:
-            raise ValueError("max_truth_table_function_arity must lie in [1, n_features]")
+        if not 1 <= self.min_truth_table_function_arity <= self.max_truth_table_function_arity <= self.n_features:
+            raise ValueError("invalid truth-table arity range")
         if not 1 <= self.min_hamming_threshold_function_arity <= self.max_hamming_threshold_function_arity <= self.n_features:
             raise ValueError("invalid Hamming-threshold arity range")
 
