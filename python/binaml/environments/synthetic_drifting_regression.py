@@ -219,7 +219,12 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
         if gate_distribution_sampled:
             self.gate_dag = self._sample_dag(self.config.n_functions, self.config.p_sample_min_g, self.config.p_sample_max_g, self._gate_distribution_rng)
         self.input_state, input_sampling_mask = self._partial_ancestral_sample(self.input_state, self.input_dag, self._input_sampling_rng)
-        self.gate_state, gate_sampling_mask = self._partial_ancestral_sample(self.gate_state, self.gate_dag, self._gate_sampling_rng)
+        if self.config.p_g > 0:
+            self.gate_state, gate_sampling_mask = self._partial_ancestral_sample(
+                self.gate_state, self.gate_dag, self._gate_sampling_rng
+            )
+        else:
+            gate_sampling_mask = np.zeros(len(self.gate_state), dtype=bool)
         intercept_sampled = bool(self._intercept_rng.random() < self.config.p_b)
         if intercept_sampled:
             self.intercept = float(self._intercept_rng.uniform(self.config.b_min, self.config.b_max))

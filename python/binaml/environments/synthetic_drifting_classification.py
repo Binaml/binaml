@@ -302,11 +302,14 @@ class SyntheticDriftingClassificationStream(Iterator[tuple[np.ndarray, int]]):
                     self.config.p_sample_max_g,
                     self._gate_distribution_rngs[class_index],
                 )
-            self.gate_states[class_index], gate_mask = self._partial_ancestral_sample(
-                self.gate_states[class_index],
-                self.gate_dags[class_index],
-                self._gate_sampling_rngs[class_index],
-            )
+            if self.config.p_g > 0:
+                self.gate_states[class_index], gate_mask = self._partial_ancestral_sample(
+                    self.gate_states[class_index],
+                    self.gate_dags[class_index],
+                    self._gate_sampling_rngs[class_index],
+                )
+            else:
+                gate_mask = np.zeros(len(self.gate_states[class_index]), dtype=bool)
             gate_sampling_masks.append(gate_mask.tolist())
             intercept_sampled.append(bool(self._intercept_rngs[class_index].random() < self.config.p_b))
             if intercept_sampled[class_index]:
