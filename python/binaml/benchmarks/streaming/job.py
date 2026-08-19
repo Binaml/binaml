@@ -32,7 +32,6 @@ def run_streaming_job(benchmark: StreamingBenchmark, args: argparse.Namespace) -
     record = benchmark.record(trajectory.seed, result, warmup)
     timing = record["timing_seconds"]
     return {
-        "schema_version": 1,
         "model": args.model_name,
         "warmup_samples": warmup,
         **record,

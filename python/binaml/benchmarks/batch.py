@@ -18,9 +18,6 @@ def run_batch_benchmark_cli(
     job_module: str,
     entries_key: str,
     default_entries: list[dict[str, object]],
-    config_schema_version: int,
-    summary_schema_version: int,
-    metrics_schema_version: int,
     summarize_variant: Callable[[list[dict[str, object]]], dict[str, object]],
     extract_metrics: Callable[[dict[str, dict[str, object]]], dict[str, object]],
     variant_label: Callable[[dict[str, object], int], str],
@@ -42,7 +39,6 @@ def run_batch_benchmark_cli(
 
     seeds = [int(seed) for seed in base_scenario["seeds"]]
     config = {
-        "schema_version": config_schema_version,
         "source": str(args.scenario),
         "entries": entries,
         "n_variants": len(variants),
@@ -76,11 +72,10 @@ def run_batch_benchmark_cli(
     variant_summaries = {label: summarize_variant(records) for label, records in records_by_variant.items() if records}
     metrics = {label: extract_metrics(summaries) for label, summaries in variant_summaries.items()}
     summary = {
-        "schema_version": summary_schema_version,
         "source": str(args.scenario),
         "metrics": metrics,
         "failed_jobs": failed,
     }
     write_json_atomically(output_dir / "summary.json", summary)
-    write_json_atomically(output_dir / "metrics.json", {"schema_version": metrics_schema_version, "metrics": metrics})
+    write_json_atomically(output_dir / "metrics.json", {"metrics": metrics})
     print(json.dumps({"run_dir": str(output_dir), "completed_jobs": len(completed), "failed_jobs": len(failed)}, indent=2))

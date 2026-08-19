@@ -6,23 +6,23 @@ import hashlib
 import json
 import math
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from .boolean_dgp import (
-    BinaryFunctionSpec,
     BooleanDgpConfig,
     ConditionalDag,
+    FunctionSpec,
     cpt_probability,
     sample_ancestrally,
-    sample_binary_function,
     sample_conditional_dag,
+    sample_function,
 )
 
-GENERATOR_VERSION = "2.0.0-numpy-pcg64dxsm"
+GENERATOR_VERSION = "4.0.0-numpy-pcg64dxsm-anf"
 
 
 def _canonical_json(value: object) -> str:
@@ -45,7 +45,6 @@ def _jsonify(value: Any) -> Any:
 class SyntheticStreamConfig:
     n_features: int
     n_functions: int
-    schema_version: int = 2
     q_max: int = 0
     p_min: float = 0.05
     p_max: float = 0.95
@@ -55,13 +54,11 @@ class SyntheticStreamConfig:
     p_g: float = 0.0
     p_sample_min_g: float = 1.0
     p_sample_max_g: float = 1.0
-    truth_table_function_probability: float = 1.0
-    min_truth_table_function_arity: int = 1
-    max_truth_table_function_arity: int = 3
-    min_hamming_threshold_function_arity: int = 1
-    max_hamming_threshold_function_arity: int = 3
-    p_activation_min: float = 0.2
-    p_activation_max: float = 0.8
+    min_n_terms: int = 1
+    max_n_terms: int = 10
+    min_term_degree: int = 1
+    max_term_degree: int = 7
+    p_negated_literal: float = 0.5
     w_min: float = -1.0
     w_max: float = 1.0
     b_min: float = 0.0
@@ -71,19 +68,18 @@ class SyntheticStreamConfig:
 
     def __post_init__(self) -> None:
         integer_fields = (
-            "schema_version",
             "n_features",
             "n_functions",
             "q_max",
-            "min_truth_table_function_arity",
-            "max_truth_table_function_arity",
-            "min_hamming_threshold_function_arity",
-            "max_hamming_threshold_function_arity",
+            "min_n_terms",
+            "max_n_terms",
+            "min_term_degree",
+            "max_term_degree",
         )
         if any(isinstance(getattr(self, field), bool) or not isinstance(getattr(self, field), int) for field in integer_fields):
             raise TypeError("integer configuration fields must be integers, not booleans")
-        if self.schema_version != 2 or self.n_features < 1 or self.n_functions < 1 or self.q_max < 0:
-            raise ValueError("unsupported schema version or invalid dimensions")
+        if self.n_features < 1 or self.n_functions < 1 or self.q_max < 0:
+            raise ValueError("invalid dimensions")
         numeric = asdict(self)
         if not all(math.isfinite(float(value)) for key, value in numeric.items() if key not in integer_fields):
             raise ValueError("numeric configuration fields must be finite")
@@ -91,25 +87,25 @@ class SyntheticStreamConfig:
             (self.p_min, self.p_max),
             (self.p_sample_min_x, self.p_sample_max_x),
             (self.p_sample_min_g, self.p_sample_max_g),
-            (self.p_activation_min, self.p_activation_max),
         )
         if any(not 0 <= low <= high <= 1 for low, high in probability_ranges):
             raise ValueError("probability ranges must lie in [0, 1]")
-        if any(not 0 <= value <= 1 for value in (self.p_x, self.p_g, self.p_b, self.truth_table_function_probability)):
+        if any(not 0 <= value <= 1 for value in (self.p_x, self.p_g, self.p_b, self.p_negated_literal)):
             raise ValueError("probabilities must lie in [0, 1]")
         if self.w_min > self.w_max or self.b_min > self.b_max or self.noise_std < 0:
             raise ValueError("invalid scale range or noise standard deviation")
-        if not 1 <= self.min_truth_table_function_arity <= self.max_truth_table_function_arity <= self.n_features:
-            raise ValueError("invalid truth-table arity range")
-        if not 1 <= self.min_hamming_threshold_function_arity <= self.max_hamming_threshold_function_arity <= self.n_features:
-            raise ValueError("invalid Hamming-threshold arity range")
+        if not 1 <= self.min_n_terms <= self.max_n_terms:
+            raise ValueError("invalid ANF term-count range")
+        if not 1 <= self.min_term_degree <= self.max_term_degree <= self.n_features:
+            raise ValueError("invalid term degree range")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> SyntheticStreamConfig:
-        return cls(**value)
+        known = {field.name for field in fields(cls)}
+        return cls(**{key: item for key, item in value.items() if key in known})
 
     @property
     def fingerprint(self) -> str:
@@ -175,7 +171,7 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
             np.random.Generator(np.random.PCG64DXSM(stream)) for stream in streams[6:]
         )
         dgp_config = BooleanDgpConfig.from_regression_config(config)
-        self.functions = [sample_binary_function(self._target_rng, dgp_config) for _ in range(config.n_functions)]
+        self.functions = [sample_function(self._target_rng, dgp_config) for _ in range(config.n_functions)]
         self.weights = self._target_rng.uniform(config.w_min, config.w_max, config.n_functions)
         self.intercept = float(self._target_rng.uniform(config.b_min, config.b_max))
         self.input_dag = self._sample_dag(config.n_features, config.p_sample_min_x, config.p_sample_max_x, self._input_distribution_rng)
@@ -212,7 +208,9 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
         x = self.input_state.copy()
         gate_state = self.gate_state.copy()
         intercept = self.intercept
-        latent = intercept + float(sum(weight * gate * function.evaluate(x) for weight, gate, function in zip(self.weights, gate_state, self.functions, strict=True)))
+        latent = intercept + float(
+            sum(weight * gate * function.evaluate(x) for weight, gate, function in zip(self.weights, gate_state, self.functions, strict=True))
+        )
         noise = float(self._noise_rng.normal(0, self.config.noise_std))
         input_distribution_sampled = bool(self._input_drift_rng.random() < self.config.p_x)
         gate_distribution_sampled = bool(self._gate_drift_rng.random() < self.config.p_g)
@@ -278,7 +276,7 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
         input_state = np.asarray(state["input_state"], dtype=np.uint8)
         gate_state = np.asarray(state["gate_state"], dtype=np.uint8)
         weights = np.asarray(state["weights"], dtype=float)
-        functions = [BinaryFunctionSpec.from_dict(value) for value in state["functions"]]
+        functions = [FunctionSpec.from_dict(value) for value in state["functions"]]
         input_dag = ConditionalDag.from_dict(state["input_distribution"], self.config.n_features)
         gate_dag = ConditionalDag.from_dict(state["gate_distribution"], self.config.n_functions)
         intercept, time = float(state["intercept"]), state["time"]

@@ -90,11 +90,17 @@ def _tiny_regression_scenario(tmp_path) -> object:
         json.dumps(
             {
                 "name": "tiny",
-                "schema_version": 2,
                 "n_samples": 4,
                 "warmup_samples": 0,
                 "seeds": [0],
-                "environment": {"schema_version": 2, "n_features": 3, "n_functions": 1},
+                "environment": {
+                    "n_features": 3,
+                    "n_functions": 1,
+                    "min_n_terms": 1,
+                    "max_n_terms": 3,
+                    "min_term_degree": 1,
+                    "max_term_degree": 3,
+                },
             }
         ),
         encoding="utf-8",

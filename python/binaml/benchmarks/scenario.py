@@ -7,7 +7,7 @@ import json
 from itertools import product
 from pathlib import Path
 
-_TOP_LEVEL_KEYS = frozenset({"name", "schema_version", "n_samples", "n_train", "n_test", "warmup_samples", "seeds", "p_noise"})
+_TOP_LEVEL_KEYS = frozenset({"name", "n_samples", "n_train", "n_test", "warmup_samples", "seeds", "p_noise"})
 
 
 def load_scenario(path: str | Path) -> dict[str, object]:

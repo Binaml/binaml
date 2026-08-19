@@ -1,11 +1,10 @@
 """Reproducible data-generating environments."""
 
 from .boolean_dgp import (
-    BinaryFunctionSpec,
-    BooleanBatch,
     BooleanDgpConfig,
     ConditionalDag,
-    generate_boolean_batch,
+    ConjunctionTerm,
+    FunctionSpec,
 )
 from .synthetic_drifting_classification import (
     ClassificationTrajectory,
@@ -21,17 +20,16 @@ from .synthetic_drifting_regression import (
 )
 
 __all__ = [
-    "BinaryFunctionSpec",
-    "BooleanBatch",
     "BooleanDgpConfig",
     "ClassificationTrajectory",
     "ConditionalDag",
+    "ConjunctionTerm",
+    "FunctionSpec",
     "SyntheticClassificationStreamConfig",
     "SyntheticDriftingClassificationStream",
     "SyntheticDriftingRegressionStream",
     "SyntheticStreamConfig",
     "Trajectory",
-    "generate_boolean_batch",
     "generate_classification_trajectory",
     "generate_trajectory",
 ]

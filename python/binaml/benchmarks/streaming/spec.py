@@ -17,9 +17,6 @@ class StreamingBenchmark:
     run_prefix: str
     job_module: str
     default_models: tuple[str, ...]
-    config_schema_version: int
-    summary_schema_version: int
-    metrics_schema_version: int
     reserved_parameters: frozenset[str]
     bind_factory: Callable[[ModelFactory, dict[str, object]], ModelFactory]
     load_trajectory_from_scenario: Callable[[dict[str, object], int], Any]

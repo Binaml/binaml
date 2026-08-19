@@ -1,40 +1,43 @@
 {
   "models": [
     {
-      "name": "BRegressor",
       "factory": "binaml.models:BRegressor",
+      "name": "BRegressor",
       "parameters": {
-        "learning_rate": 0.05,
-        "l2": 0.005,
-        "batch_size": 4,
-        "sgd_steps": 35,
-        "parent_top_k": 8,
+        "batch_size": 5,
+        "l2": 0.002,
         "l_pat": 4,
-        "max_functions": 48,
-        "max_expert_nodes": 64
-      }
-    },
-    {
-      "name": "SGDLinearRegressor",
-      "factory": "binaml.models:SGDLinearRegressor",
-      "parameters": {
-        "learning_rate": 0.01,
-        "l2": 0.01,
-        "center_binary_features": false,
-        "batch_size": 1,
-        "sgd_steps": 6
-      }
-    },
-    {
-      "name": "MLPRegressor",
-      "factory": "binaml.models:MLPRegressor",
-      "parameters": {
-        "hidden_layer_sizes": [100, 100],
         "learning_rate": 0.015,
+        "max_expert_nodes": 64,
+        "max_functions": 32,
+        "parent_top_k": 8,
+        "sgd_steps": 35
+      }
+    },
+    {
+      "factory": "binaml.models:SGDLinearRegressor",
+      "name": "SGDLinearRegressor",
+      "parameters": {
+        "batch_size": 1,
+        "center_binary_features": false,
+        "l2": 0.0075,
+        "learning_rate": 0.02,
+        "sgd_steps": 4
+      }
+    },
+    {
+      "factory": "binaml.models:MLPRegressor",
+      "name": "MLPRegressor",
+      "parameters": {
         "alpha": 0.001,
         "batch_size": 1,
-        "sgd_steps": 3,
-        "random_state": 0
+        "hidden_layer_sizes": [
+          100,
+          100
+        ],
+        "learning_rate": 0.03,
+        "random_state": 0,
+        "sgd_steps": 6
       }
     }
   ]

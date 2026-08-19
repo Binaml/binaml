@@ -113,7 +113,6 @@ def run_streaming_benchmark_cli(
         source_argument = "--trajectory"
 
     config = {
-        "schema_version": benchmark.config_schema_version,
         "source": str(source_path),
         "models": list(models),
         "model_config": entries,
@@ -137,14 +136,13 @@ def run_streaming_benchmark_cli(
     model_summaries = {name: benchmark.summarize(records) for name, records in records_by_model.items() if records}
     metrics = benchmark.extract_metrics(model_summaries)
     summary = {
-        "schema_version": benchmark.summary_schema_version,
         "source": str(source_path),
         "metrics": metrics,
         "failed_jobs": failed,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (output_dir / "metrics.json").write_text(
-        json.dumps({"schema_version": benchmark.metrics_schema_version, "metrics": metrics}, indent=2, sort_keys=True)
+        json.dumps({"metrics": metrics}, indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )

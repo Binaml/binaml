@@ -1,11 +1,11 @@
-"""Input DGP and boolean function sampler shared by synthetic environments."""
+"""Input DGP and ground-truth function sampler shared by synthetic environments."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, fields
 from itertools import combinations
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
@@ -13,49 +13,45 @@ import numpy as np
 @dataclass(frozen=True)
 class BooleanDgpConfig:
     n_features: int
-    schema_version: int = 4
     q_max: int = 0
     p_min: float = 0.05
     p_max: float = 0.95
     p_sample_min_x: float = 1.0
     p_sample_max_x: float = 1.0
-    truth_table_function_probability: float = 1.0
-    min_truth_table_function_arity: int = 1
-    max_truth_table_function_arity: int = 3
-    min_hamming_threshold_function_arity: int = 1
-    max_hamming_threshold_function_arity: int = 3
-    p_activation_min: float = 0.2
-    p_activation_max: float = 0.8
+    min_n_terms: int = 1
+    max_n_terms: int = 10
+    min_term_degree: int = 1
+    max_term_degree: int = 7
+    p_negated_literal: float = 0.5
 
     def __post_init__(self) -> None:
         integer_fields = (
-            "schema_version",
             "n_features",
             "q_max",
-            "max_truth_table_function_arity",
-            "min_truth_table_function_arity",
-            "max_hamming_threshold_function_arity",
+            "min_n_terms",
+            "max_n_terms",
+            "min_term_degree",
+            "max_term_degree",
         )
         if any(isinstance(getattr(self, field), bool) or not isinstance(getattr(self, field), int) for field in integer_fields):
             raise TypeError("integer configuration fields must be integers, not booleans")
-        if self.schema_version != 4 or self.n_features < 1 or self.q_max < 0:
-            raise ValueError("unsupported schema version or invalid dimensions")
+        if self.n_features < 1 or self.q_max < 0:
+            raise ValueError("invalid dimensions")
         numeric = asdict(self)
         if not all(math.isfinite(float(value)) for key, value in numeric.items() if key not in integer_fields):
             raise ValueError("numeric configuration fields must be finite")
         probability_ranges = (
             (self.p_min, self.p_max),
             (self.p_sample_min_x, self.p_sample_max_x),
-            (self.p_activation_min, self.p_activation_max),
         )
         if any(not 0 <= low <= high <= 1 for low, high in probability_ranges):
             raise ValueError("probability ranges must lie in [0, 1]")
-        if not 0 <= self.truth_table_function_probability <= 1:
+        if not 0 <= self.p_negated_literal <= 1:
             raise ValueError("probabilities must lie in [0, 1]")
-        if not 1 <= self.min_truth_table_function_arity <= self.max_truth_table_function_arity <= self.n_features:
-            raise ValueError("invalid truth-table arity range")
-        if not 1 <= self.min_hamming_threshold_function_arity <= self.max_hamming_threshold_function_arity <= self.n_features:
-            raise ValueError("invalid Hamming-threshold arity range")
+        if not 1 <= self.min_n_terms <= self.max_n_terms:
+            raise ValueError("invalid ANF term-count range")
+        if not 1 <= self.min_term_degree <= self.max_term_degree <= self.n_features:
+            raise ValueError("invalid term degree range")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -74,13 +70,11 @@ class BooleanDgpConfig:
             p_max=config.p_max,  # type: ignore[attr-defined]
             p_sample_min_x=config.p_sample_min_x,  # type: ignore[attr-defined]
             p_sample_max_x=config.p_sample_max_x,  # type: ignore[attr-defined]
-            truth_table_function_probability=config.truth_table_function_probability,  # type: ignore[attr-defined]
-            min_truth_table_function_arity=config.min_truth_table_function_arity,  # type: ignore[attr-defined]
-            max_truth_table_function_arity=config.max_truth_table_function_arity,  # type: ignore[attr-defined]
-            min_hamming_threshold_function_arity=config.min_hamming_threshold_function_arity,  # type: ignore[attr-defined]
-            max_hamming_threshold_function_arity=config.max_hamming_threshold_function_arity,  # type: ignore[attr-defined]
-            p_activation_min=config.p_activation_min,  # type: ignore[attr-defined]
-            p_activation_max=config.p_activation_max,  # type: ignore[attr-defined]
+            min_n_terms=config.min_n_terms,  # type: ignore[attr-defined]
+            max_n_terms=config.max_n_terms,  # type: ignore[attr-defined]
+            min_term_degree=config.min_term_degree,  # type: ignore[attr-defined]
+            max_term_degree=config.max_term_degree,  # type: ignore[attr-defined]
+            p_negated_literal=config.p_negated_literal,  # type: ignore[attr-defined]
         )
 
     @classmethod
@@ -89,56 +83,64 @@ class BooleanDgpConfig:
 
 
 @dataclass(frozen=True)
-class BinaryFunctionSpec:
+class ConjunctionTerm:
+    """One ANF monomial: conjunction of literals."""
+
     feature_indices: tuple[int, ...]
-    family: Literal["truth_table", "hamming_threshold"]
-    truth_table: tuple[int, ...] | None = None
-    activation_probability: float | None = None
-    threshold: int | None = None
+    negated: tuple[bool, ...]
 
     def __post_init__(self) -> None:
+        if len(self.feature_indices) != len(self.negated):
+            raise ValueError("negated mask must match feature_indices length")
         if not self.feature_indices or len(set(self.feature_indices)) != len(self.feature_indices):
             raise ValueError("feature_indices must be non-empty and distinct")
-        if self.family == "truth_table":
-            if self.truth_table is None or len(self.truth_table) != 2 ** len(self.feature_indices):
-                raise ValueError("invalid truth-table function")
-            if any(value not in (0, 1) for value in self.truth_table):
-                raise ValueError("truth_table values must be binary")
-            if self.activation_probability is None or not 0 <= self.activation_probability <= 1:
-                raise ValueError("invalid activation probability")
-        elif self.family == "hamming_threshold":
-            if self.threshold is None or not 1 <= self.threshold <= len(self.feature_indices):
-                raise ValueError("invalid Hamming threshold")
-        else:
-            raise ValueError("unknown function family")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "feature_indices": list(self.feature_indices),
-            "family": self.family,
-            "truth_table": list(self.truth_table) if self.truth_table is not None else None,
-            "activation_probability": self.activation_probability,
-            "threshold": self.threshold,
+            "negated": list(self.negated),
         }
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> BinaryFunctionSpec:
-        table = value.get("truth_table")
+    def from_dict(cls, value: dict[str, Any]) -> ConjunctionTerm:
         return cls(
             tuple(value["feature_indices"]),
-            value["family"],
-            tuple(table) if table is not None else None,
-            value.get("activation_probability"),
-            value.get("threshold"),
+            tuple(value["negated"]),
         )
 
     def evaluate(self, x: np.ndarray) -> int:
-        if self.family == "hamming_threshold":
-            return int(sum(int(x[feature]) for feature in self.feature_indices) >= self.threshold)  # type: ignore[operator]
-        index = 0
-        for feature in self.feature_indices:
-            index = (index << 1) | int(x[feature])
-        return self.truth_table[index]  # type: ignore[index]
+        return int(all((not x[i]) if flip else x[i] for i, flip in zip(self.feature_indices, self.negated, strict=True)))
+
+
+@dataclass(frozen=True)
+class FunctionSpec:
+    """Ground-truth f_k as ANF: constant ⊕ XOR of conjunction terms."""
+
+    constant: bool
+    terms: tuple[ConjunctionTerm, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "constant": self.constant,
+            "terms": [term.to_dict() for term in self.terms],
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> FunctionSpec:
+        if "family" in value:
+            raise ValueError("unsupported legacy function spec with family field")
+        if "feature_indices" in value and "terms" not in value:
+            raise ValueError("unsupported legacy flat formula spec")
+        return cls(
+            bool(value["constant"]),
+            tuple(ConjunctionTerm.from_dict(term) for term in value["terms"]),
+        )
+
+    def evaluate(self, x: np.ndarray) -> int:
+        value = int(self.constant)
+        for term in self.terms:
+            value ^= term.evaluate(x)
+        return value
 
 
 @dataclass(frozen=True)
@@ -177,29 +179,18 @@ class ConditionalDag:
         return cls(order, parents, cpts, probability)
 
 
-@dataclass(frozen=True)
-class BooleanBatch:
-    X: np.ndarray
-    target_function: BinaryFunctionSpec
-    config: BooleanDgpConfig
-    seed: int
+def sample_conjunction_term(rng: np.random.Generator, config: BooleanDgpConfig) -> ConjunctionTerm:
+    degree = int(rng.integers(config.min_term_degree, config.max_term_degree + 1))
+    indices = tuple(int(index) for index in rng.choice(config.n_features, degree, replace=False))
+    negated = tuple(bool(rng.random() < config.p_negated_literal) for _ in indices)
+    return ConjunctionTerm(indices, negated)
 
 
-def sample_binary_function(rng: np.random.Generator, config: BooleanDgpConfig) -> BinaryFunctionSpec:
-    if rng.random() < config.truth_table_function_probability:
-        arity = int(
-            rng.integers(
-                config.min_truth_table_function_arity,
-                config.max_truth_table_function_arity + 1,
-            )
-        )
-        indices = tuple(int(index) for index in rng.choice(config.n_features, arity, replace=False))
-        activation = float(rng.uniform(config.p_activation_min, config.p_activation_max))
-        table = tuple(int(value) for value in rng.binomial(1, activation, 2**arity))
-        return BinaryFunctionSpec(indices, "truth_table", table, activation)
-    arity = int(rng.integers(config.min_hamming_threshold_function_arity, config.max_hamming_threshold_function_arity + 1))
-    indices = tuple(int(index) for index in rng.choice(config.n_features, arity, replace=False))
-    return BinaryFunctionSpec(indices, "hamming_threshold", threshold=int(rng.integers(1, arity + 1)))
+def sample_function(rng: np.random.Generator, config: BooleanDgpConfig) -> FunctionSpec:
+    n_terms = int(rng.integers(config.min_n_terms, config.max_n_terms + 1))
+    constant = bool(rng.integers(0, 2))
+    terms = tuple(sample_conjunction_term(rng, config) for _ in range(n_terms))
+    return FunctionSpec(constant, terms)
 
 
 def sample_conditional_dag(
@@ -236,25 +227,3 @@ def sample_ancestrally(dag: ConditionalDag, rng: np.random.Generator) -> np.ndar
     for node in dag.order:
         state[node] = int(rng.random() < cpt_probability(dag, state, node))
     return state
-
-
-def generate_boolean_batch(config: BooleanDgpConfig, n_samples: int, seed: int) -> BooleanBatch:
-    if isinstance(n_samples, bool) or not isinstance(n_samples, int) or n_samples < 0:
-        raise ValueError("n_samples must be a non-negative integer")
-    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**128:
-        raise ValueError("seed must be an integer in [0, 2**128)")
-    target_rng, input_rng = (np.random.Generator(np.random.PCG64DXSM(stream)) for stream in np.random.SeedSequence(seed).spawn(2))
-    target_function = sample_binary_function(target_rng, config)
-    input_dag = sample_conditional_dag(
-        input_rng,
-        width=config.n_features,
-        q_max=config.q_max,
-        p_min=config.p_min,
-        p_max=config.p_max,
-        p_sample_min=config.p_sample_min_x,
-        p_sample_max=config.p_sample_max_x,
-    )
-    X = np.empty((n_samples, config.n_features), dtype=np.uint8)
-    for index in range(n_samples):
-        X[index] = sample_ancestrally(input_dag, input_rng)
-    return BooleanBatch(X, target_function, config, seed)
