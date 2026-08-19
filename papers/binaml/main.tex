@@ -97,8 +97,8 @@ subject to data drift.  Binary features provide a task-agnostic representation
 and enable models optimized for memory, latency, and energy efficiency.  This
 paper specifies Binaml's online ensemble models, \texttt{BRegressor} for scalar
 regression and \texttt{BClassifier} for multiclass classification, as ensembles
-of batch-learned boolean experts with task-specific linear heads.  Both models adapt online rather than
-relying on a stationary train/serve assumption and learn compact compositional
+of batch-learned conjunction experts with task-specific linear heads.  Both models adapt online rather than
+relying on a stationary train/serve assumption and learn compact conjunction
 representations from residual feedback.  Runtime memory is fixed at model
 construction and the online hot path performs zero heap allocation after
 \texttt{new}.  The models are environment-agnostic:
@@ -121,31 +121,25 @@ Symbols below are used consistently in this paper and in
   \item[$e_t,s_t$] Residual and supervision label appended to the expert batch.
   \item[$b,w_k,\eta,\lambda$] Intercept, ensemble weight of expert~$k$,
   learning rate (\texttt{learning\_rate}), and $\ell_2$ decay (\texttt{l2}).
-  \item[$f_k(x)$] Boolean expert $k$ mapping $\{0,1\}^d$ to
-  $\{0,1\}$, stored as a compact \texttt{FunctionGraph}.
-  \item[$N_k,N_{\max}$] Compact node count in expert~$k$ and fixed per-expert
-  node cap (\texttt{max\_expert\_nodes}).
-  \item[$T\in\{0,\ldots,15\}$] Four-bit truth table of an arity-2 composed
-  node.
+  \item[$f_k(x)$] Conjunction expert $k$: an AND of signed input literals, stored
+  as a compact \texttt{ConjunctionExpert}.
+  \item[$\ell_k,\ell_{\max}$] Literal count in expert~$k$ and maximum literals
+  per conjunction (\texttt{max\_conjunction\_length}).
   \item[$B,S,n$] Expert batch size (\texttt{batch\_size}), SGD steps per
   observation (\texttt{sgd\_steps}), and batch index.
-  \item[$K_p,K_{\max},l_{\mathrm{pat}}$] Parent top-$K_p$ width
-  (\texttt{parent\_top\_k}), ensemble capacity (\texttt{max\_functions}), and
-  layer patience (\texttt{l\_pat}): stop after $l_{\mathrm{pat}}$ consecutive
-  composed layers without global in-sample accuracy improvement.
-  \item[$P,V,L_{\mathrm{build}}$] Derived batch-build caps at construction:
-  pair-scratch width $P=\binom{K_p}{2}$; ephemeral graph pool
-  $V=(K_p\wedge d)+L_{\mathrm{build}}K_p+1$ with
-  $L_{\mathrm{build}}=\max(1,N_{\max}-K_p\wedge d)$.
+  \item[$K_c,K_{\max},L_s$] Beam width (\texttt{max\_conjunctions}), ensemble
+  capacity (\texttt{max\_functions}), and stale-layer patience
+  (\texttt{stale\_layers}): stop extending after $L_s$ consecutive depths
+  without improving the best in-sample batch accuracy seen so far.
 \end{description}
 
 \section{Model}
 Both \texttt{BRegressor} and \texttt{BClassifier} maintain an ensemble of
-boolean experts.  Expert structure evolves slowly through batch-local graph
-growth, in-sample output selection, and compaction into \texttt{FunctionGraph}
-objects; expert weights in the linear head adapt on every observation.  At
-capacity $K_{\max}$, ensemble pruning drops the weakest expert.  The two models
-differ only in the linear head that maps expert activations to predictions.
+conjunction experts.  Expert structure evolves slowly through batch-local beam
+search over literal conjunctions and in-sample output selection; expert weights
+in the linear head adapt on every observation.  At capacity $K_{\max}$, ensemble
+pruning drops the weakest expert.  The two models differ only in the linear head
+that maps expert activations to predictions.
 
 \subsection{Regression head}
 At time $t$, the regressor receives $x_t\in\{0,1\}^d$ and later observes a
@@ -165,7 +159,7 @@ w_k\,f_k(x_t),
 \]
 where $b\in\mathbb R$, each $w_k\in\mathbb R$, and each
 $f_k(x_t)\in\{0,1\}$.
-Each $f_k$ is a compact boolean expert built from one supervision batch.
+Each $f_k$ is a compact conjunction expert built from one supervision batch.
 Expert construction consumes a binary supervision bit derived from the scalar
 target.  With pre-update prediction $\hat y_t$, the residual is
 $e_t=y_t-\hat y_t$ and the label appended to the current expert batch is
@@ -226,45 +220,40 @@ w_{k,c} &\leftarrow w_{k,c}-\eta\,\delta_{t,c}\,f_k(x_t).
 Each observation performs $S$ such steps on the same activation row.
 
 \section{Building experts}
-Binaml builds and maintains a collection of boolean experts.  Each expert is a
-compact boolean function over input bits; the ensemble grows one expert per
-filled batch while weights $w_k$ update on every observation.  Expert
-structure therefore evolves slowly, on batch boundaries, while the linear head
-tracks the task quickly.  Composition starts from the most basic nontrivial
-boolean learning unit: two-input tables.  Combining them yields richer experts
-without beginning from high-arity search.  A composed node combines two parent
-activations using a four-bit truth table $T\in\{0,\ldots,15\}$.
+Binaml builds and maintains a collection of conjunction experts.  Each expert is
+an AND of signed input literals; the ensemble grows one expert per filled batch
+while weights $w_k$ update on every observation.  Expert structure therefore
+evolves slowly, on batch boundaries, while the linear head tracks the task
+quickly.  Candidate conjunctions are grown one literal at a time and ranked by
+in-sample accuracy, with association score as a tie-break.
 
 \subsection{Expert representation and batch learning}
-Each expert batch grows an ephemeral narrow DAG: layer zero holds up to $K_p$
-non-constant source bits; at each subsequent layer the builder forms every
-distinct pair among the current layer's parents, learns a truth table on the
-current batch, and keeps the top-$K_p$ candidates by descending $|\text{assoc}|$.
-Growth stops after $L_{\mathrm{build}}$ composed layers, after
-$l_{\mathrm{pat}}$ consecutive composed layers without global in-sample
-accuracy improvement, when fewer than two
-parents remain, when no valid pair survives constant filtering, or once
-accuracy is perfect on $\mathcal B_n$.  When the batch fills, the builder
-selects one output node from the top-$K_p$ nodes by $|\text{assoc}|$, then by
-descending in-sample accuracy, inverting the output bit when the inverted node
-is more accurate on $\mathcal B_n$.  The subgraph is compacted
-into a \texttt{FunctionGraph} and appended to the ensemble with weight zero.  If the
-ensemble exceeds capacity $K_{\max}$, the expert with smallest
-$|w_k|$ is removed, breaking ties toward the oldest index.  There is no
-hold-out batch and no shared candidate queue across batches.
+Each expert batch runs a layered beam search.  Depth~$0$ holds up to $K_c$
+non-constant signed literals (one literal per candidate).  To extend depth~$d$
+to depth~$d{+}1$, the builder ANDs each depth~$d$ parent column with a new
+signed literal column drawn from depth~$0$, skipping literals already present in
+the parent key and discarding constant results.  Candidates are deduplicated by
+a \texttt{ConjunctionKey} (positive and negative bit masks over input
+coordinates), pruned to the top-$K_c$ entries by $|\text{assoc}|$, and scored on
+the current batch.  Growth stops after $\ell_{\max}$ literals, after $L_s$
+consecutive extension depths without improving the best accuracy seen across
+depths, when the beam is empty, or once accuracy is perfect on
+$\mathcal B_n$.  When the batch fills, the builder selects the best candidate
+across all nonempty depth layers by descending in-sample accuracy, then by
+$|\text{assoc}|$, and stores it as a \texttt{ConjunctionExpert}.  The expert is
+appended to the ensemble with weight zero.  If the ensemble exceeds capacity
+$K_{\max}$, the expert with smallest $|w_k|$ is removed, breaking ties toward
+the oldest index.  There is no hold-out batch and no shared candidate queue
+across batches.
 
-\subsection{Compact evaluation}
-A stored \texttt{FunctionGraph} lists source indices and composed nodes in
-topological order.  Each node is either a source coordinate, a constant, or a
-composed operation referencing two already evaluated positions and one four-bit
-truth table.  One forward pass evaluates $f_k(x)$ for prediction and SGD.
-The eight \texttt{u8} counters used to learn a table cover every
-$(u,v,s)\in\{0,1\}^3$ combination, which limits the expert batch size to
-$B\leq255$.
+\subsection{Conjunction evaluation}
+A stored \texttt{ConjunctionExpert} lists up to $\ell_{\max}$ signed literals
+in sorted feature order.  Evaluation is a single pass: $f_k(x)=1$ iff every
+positive literal sees a one and every negated literal sees a zero.  One forward
+pass evaluates $f_k(x)$ for prediction and SGD.
 
 \subsection{Supervision and batching}
-Exact truth-table counting needs a bounded window; batching amortizes graph
-growth.  Batch $n$ is
+Batching amortizes conjunction search over $B$ supervision bits.  Batch $n$ is
 \[
 \mathcal B_n
 =
@@ -272,9 +261,9 @@ growth.  Batch $n$ is
 \qquad |I_n|=B,
 \]
 where $I_n$ is the contiguous block of $B$ observations since the previous
-structural update.  Processing $\mathcal B_n$ grows an ephemeral graph, selects
-one output by in-sample accuracy, compacts it, appends $(f,w=0)$ to the
-ensemble, and prunes to $K_{\max}$ if needed.
+structural update.  Processing $\mathcal B_n$ runs the beam search, selects
+one conjunction by in-sample accuracy, appends $(f,w=0)$ to the ensemble, and
+prunes to $K_{\max}$ if needed.
 
 \paragraph{Association score.}
 For a boolean batch column $z_{1:B}$ and supervision labels $s_{1:B}$, let
@@ -283,44 +272,27 @@ $N_{xy}=\sum_i z_i s_i$.  Define
 \[
 \text{assoc}(z,s)=N\,N_{xy}-N_x N_y.
 \]
-Parent nodes are ranked by $|\text{assoc}(z,s)|$, breaking ties by node id.
-Sources use their coordinate columns; composed nodes use their evaluated
-batch columns.  Negation at layer zero is not materialized as separate nodes:
-anti-correlated sources rank highly on $|\text{assoc}|$, and output polarity
-flip handles $\neg x_i$ when it improves in-sample accuracy.
+Beam candidates are ranked by descending in-sample accuracy; ties break on
+$|\text{assoc}(z,s)|$.  Layer~$0$ enumerates both polarities of each
+non-constant input bit, so negated literals enter the beam without a separate
+negation node.
 
-\subsection{Truth-table learning}
-Given two parent batch columns $u_{1:B}$, $v_{1:B}$ and supervision labels
-$s_{1:B}$, the learner returns the Hamming-error-minimizing four-bit table.
-Its state is a fixed array of eight \texttt{u8} counters, one for each
-combination of the two parent values and supervision label.  The learned result is
-a four-bit truth table represented by one \texttt{u8}.  The counters record
-the frequencies needed to select each table output by majority, with ties
-resolving to zero.  As one counter may receive every observation, the
-\texttt{u8} counters bound the admissible batch size to $B\leq255$.
-
-\subsection{Batch graph growth}
-Starting from layer zero, the builder repeatedly appends composed layers until
-$L_{\mathrm{build}}$ layers exist or a structural stop triggers:
+\subsection{Layered beam extension}
+Starting from depth~$0$, the builder repeatedly extends to the next depth until
+a structural stop triggers:
 \begin{enumerate}
-  \item Let $L_{\mathrm{build}}=\max(1,N_{\max}-(K_p\wedge d))$.
-  \item While the composed-layer count is below $L_{\mathrm{build}}$, fewer than
-  $l_{\mathrm{pat}}$ consecutive layers have failed to improve global in-sample
-  accuracy, at least
-  two non-constant parents remain, at least one valid pair survives constant
-  filtering, and accuracy is not yet perfect on $\mathcal B_n$:
+  \item While fewer than $L_s$ consecutive extension depths have failed to
+  improve the best accuracy across depths, the beam is nonempty, depth is below
+  $\ell_{\max}-1$, and accuracy is not yet perfect on $\mathcal B_n$:
   \begin{enumerate}
-  \item Let $P_{\ell-1}$ be the nodes in layer $\ell-1$ (already capped at
-  $K_p$).
-  \item Form every distinct pair in $P_{\ell-1}$.
-  \item For each pair, learn a truth table on $\mathcal B_n$, discard constant
-  tables and constant parents, and rank survivors by $|\text{assoc}|$.
-  \item Keep the top-$K_p$ composed nodes as layer $\ell$.
+  \item For each parent in depth~$d$, form extensions by AND-ing the parent
+  batch column with each admissible signed literal column from depth~$0$.
+  \item Deduplicate by \texttt{ConjunctionKey}, rank by $|\text{assoc}|$, and
+  keep the top-$K_c$ survivors as depth~$d{+}1$.
   \end{enumerate}
 \end{enumerate}
-After growth stops, the builder selects the output node from the top-$K_p$
-surviving nodes by $|\text{assoc}|$, then by descending in-sample accuracy,
-inverting the output when that improves accuracy on $\mathcal B_n$.
+After growth stops, the builder returns the best candidate across all retained
+depth layers by accuracy, then $|\text{assoc}|$.
 
 \subsection{Ensemble pruning}
 When appending a new expert would exceed $K_{\max}$, remove the stored index
@@ -330,28 +302,24 @@ past batches.
 
 \section{Runtime data structures and memory}
 The online models preallocate all hot-path storage at construction from
-$(d,B,K_{\max},N_{\max},K_p,l_{\mathrm{pat}},C)$; derived caps
-$(P,L_{\mathrm{build}},V)$ follow § Notation.  After \texttt{new}, the ensemble
-\texttt{predict}/\texttt{update} loop and in-place expert batch build perform
+$(d,B,K_{\max},K_c,\ell_{\max},L_s,C)$; extension-buffer widths are derived
+from $(d,K_c)$ at construction.  After \texttt{new}, the ensemble
+\texttt{predict}/\texttt{update} loop and in-place conjunction batch build perform
 \textbf{zero heap allocation}: no \texttt{Vec} growth, hash maps, or per-call
 scratch vectors on those paths.  Standalone batch learning exposes the same
-builder through \texttt{FunctionBuildSession}, which owns one
-\texttt{BuildWorkspace}; its \texttt{build} method is zero-alloc after session
-construction.  The one-shot \texttt{FunctionBuilder::build} entry point compacts
-into a \texttt{FunctionModel} (\texttt{FunctionGraph}) for tests and scripting.
+builder through \texttt{ConjunctionBuildSession}, which owns one
+\texttt{ConjunctionBuildWorkspace}; its \texttt{build} method is zero-alloc after session
+construction.  The one-shot \texttt{ConjunctionBuilder::build} entry point materializes
+a \texttt{ConjunctionExpert} for tests and scripting.
 
 \paragraph{Persistent model state.}
 \texttt{BRegressor} and \texttt{BClassifier} wrap a \texttt{BooleanEnsemble}
 with a task-specific head and a fixed \texttt{EnsembleWorkspace}.  Experts
-live in \texttt{functions: Box<[FunctionGraph]>} with capacity $K_{\max}$;
+live in \texttt{functions: Box<[ConjunctionExpert]>} with capacity $K_{\max}$;
 active count $F\leq K_{\max}$ is tracked in the head.  Pruning copies slot
 $j{+}1$ into slot~$j$ and clears the trailing slot in place.  Each
-\texttt{FunctionGraph} stores \texttt{source\_indices: Box<[usize]>} (capacity
-$d$), \texttt{nodes: Box<[CompactNode]>} (capacity $N_{\max}$), live counts
-\texttt{n\_sources}/\texttt{n\_nodes}, output index, and optional output
-inversion.  \texttt{CompactNode} is a source coordinate, a constant bit, or a
-composed gate \texttt{\{first, second, truth\_table\}} referencing prior
-positions.
+\texttt{ConjunctionExpert} stores up to $\ell_{\max}$ signed literals and a live
+literal count.
 
 \begin{center}
 \scriptsize
@@ -360,10 +328,10 @@ positions.
 \hline
 \textbf{Type} & \textbf{Fields} & \textbf{Capacity} & \textbf{Role} \\
 \hline
-\texttt{EnsembleConfig} & $\eta$, $\lambda$, $S$, $B$, $K_p$, $K_{\max}$, $N_{\max}$, $l_{\mathrm{pat}}$ & fixed & hyperparameters \\
-\texttt{RegressionHead} & \texttt{intercept}, \texttt{weights: Box<[f64]>}, \texttt{active} & $K_{\max}$ weights & linear head \\
-\texttt{ClassificationHead} & $C$, \texttt{intercepts}, \texttt{weights: Box<[f64]>}, \texttt{active} & $C{+}K_{\max}C$ floats & softmax head \\
-\texttt{FunctionGraph} & sources, nodes, counts, output, invert & $d$, $N_{\max}$ & one expert $f_k$ \\
+\texttt{EnsembleConfig} & $\eta$, $\lambda$, $S$, $B$, $K_c$, $K_{\max}$, $\ell_{\max}$, $L_s$ & fixed & hyperparameters \\
+\texttt{RegressionHead} & \texttt{intercept}, \texttt{weights: Box<[f32]>}, \texttt{active} & $K_{\max}$ weights & linear head \\
+\texttt{ClassificationHead} & $C$, \texttt{intercepts}, \texttt{weights: Box<[f32]>}, \texttt{active} & $C{+}K_{\max}C$ floats & softmax head \\
+\texttt{ConjunctionExpert} & signed literals, count & $\ell_{\max}$ & one expert $f_k$ \\
 \texttt{BooleanEnsemble} & config, head, \texttt{functions}, \texttt{workspace} & $K_{\max}$ slots & online engine \\
 \hline
 \end{tabular}
@@ -382,11 +350,10 @@ and reused across observations:
 \texttt{function\_values} & $K_{\max}$ bool & latest $f_k(x_t)$ \\
 \texttt{pending\_features} & $d$ bool & \texttt{predict} pairing \\
 \texttt{pending\_function\_values} & $K_{\max}$ bool & \texttt{update} SGD row \\
-\texttt{eval\_scratch} & $N_{\max}$ bool & expert forward pass \\
-\texttt{logits}, \texttt{probabilities} & $C$ f64 each & classifier head \\
+\texttt{logits} & $C$ f32 & classifier head \\
 \texttt{batch\_features} & $Bd$ bool & column-major partial batch \\
 \texttt{batch\_signs} & $B$ bool & supervision bits \\
-\texttt{build} & \texttt{BuildWorkspace} & in-place batch graph build \\
+\texttt{build} & \texttt{ConjunctionBuildWorkspace} & in-place beam search \\
 \hline
 \end{tabular}
 \end{center}
@@ -394,17 +361,14 @@ Batch columns are exposed to the builder as a flat \texttt{SignBatch} view over
 \texttt{batch\_features} without allocating column pointer vectors.
 
 \paragraph{Batch-build workspace.}
-Each \texttt{BuildWorkspace} holds fixed pools sized by $(V,P,K_p,L_{\mathrm{build}},N_{\max},d)$:
-\texttt{nodes} ($V$ \texttt{EphemeralNode}), \texttt{association\_scores}/\texttt{accuracy\_scores} ($V$),
-flat layer storage \texttt{layer\_ids} ($K_p(L_{\mathrm{build}}{+}1)$) with
-\texttt{layer\_ends}, \texttt{parent\_buf} and \texttt{rank\_scratch} ($K_p$ and
-$V$), \texttt{FlatColumnCache} ($2K_p$ column slots $\times$ $B$), pair scratch
-\texttt{pair\_scratch} ($P$ \texttt{FeatureCounter}) and \texttt{pair\_candidates}
-($P$), and compaction buffers \texttt{compact\_nodes} ($N_{\max}$),
-\texttt{compact\_sources} ($d$), plus reachability/order scratch ($V$ each).
-\texttt{build\_in\_workspace} resets lengths and reuses these buffers; compaction
-writes directly into a preallocated expert slot via \texttt{reset\_from\_parts},
-including the one-shot \texttt{FunctionBuilder::build} path.
+Each \texttt{ConjunctionBuildWorkspace} holds fixed pools sized by
+$(d,B,K_c,\ell_{\max})$: precomputed signed-literal columns ($2dB$ bool),
+$\ell_{\max}$ \texttt{DepthLayer} slots (each with $K_c$ beam entries and
+$K_cB$ column bits), extension and deduplication scratch
+($O(K_c d)$ \texttt{ExtensionCandidate}), sort indices, and one $B$-row AND
+scratch buffer.  \texttt{build\_in\_workspace} resets layer lengths and reuses
+these buffers; the selected \texttt{ConjunctionKey} lowers directly into a
+preallocated expert slot via \texttt{ConjunctionExpert::from\_key}.
 
 \begin{center}
 \scriptsize
@@ -413,24 +377,22 @@ including the one-shot \texttt{FunctionBuilder::build} path.
 \hline
 \textbf{Type} & \textbf{Fields} & \textbf{Size} & \textbf{Lifetime} \\
 \hline
-\texttt{FunctionBuildSession} & \texttt{BuildWorkspace}, config & $O(V{+}PK_pB)$ & reusable builder \\
+\texttt{ConjunctionBuildSession} & \texttt{ConjunctionBuildWorkspace}, config & $O(K_c dB)$ & reusable builder \\
 \texttt{SignBatch} & columns or flat $Bd$ layout & borrowed & one build \\
-\texttt{FeatureCounter} & \texttt{counts: [u8; 8]} & 8~B & one gate learn \\
-\texttt{FunctionModel} & \texttt{FunctionGraph} & $O(d{+}N_{\max})$ & one-shot API only \\
+\texttt{ConjunctionExpert} & literal array & $O(\ell_{\max})$ & one expert \\
 \hline
 \end{tabular}
 \end{center}
 
 \paragraph{Memory scaling and allocation policy.}
 Ignoring slice headers, resident ensemble memory scales as
-$8K_{\max}+FC$~bytes for regression weights or $8C(1{+}K_{\max})$ for
-classification, plus $K_{\max}(8d{+}24N_{\max})$ for expert slots (using
-$N_{\max}$ as the stored node cap), plus hot/build workspace
-$O(K_{\max}+d+N_{\max}+C+Bd+PK_pB+V)$~bytes derived at construction.
-Structural work peaks once every $B$ updates inside the preallocated
-\texttt{build} pool; per-observation work reuses \texttt{eval\_scratch} and
-head scratch without heap growth.  Regression tests assert zero allocations
-after \texttt{new} on the ensemble and \texttt{FunctionBuildSession} hot paths.
+$4K_{\max}$~bytes for regression weights or $4C(1{+}K_{\max})$ for
+classification, plus $K_{\max}\,O(\ell_{\max})$ for expert literal storage,
+plus hot/build workspace $O(K_{\max}+d+C+Bd+K_c\ell_{\max}B+K_c d)$~bytes
+derived at construction.  Structural work peaks once every $B$ updates inside the
+preallocated \texttt{build} pool; per-observation work reuses head scratch
+without heap growth.  Regression tests assert zero allocations after
+\texttt{new} on the ensemble and \texttt{ConjunctionBuildSession} hot paths.
 
 \section{Online head updates}
 Expert identity is discrete; head parameters are continuous, so the two are
@@ -451,9 +413,9 @@ cleared.
 \begin{description}
   \item[\textbf{Linear}] Learning rate $\eta$, decay $\lambda$, and $S$ SGD
   steps per observation.
-  \item[\textbf{Batch structure}] Expert batch size $B$, parent top-$K_p$ width
-  $K_p$, derived caps $(P,L_{\mathrm{build}},V)$, patience $l_{\mathrm{pat}}$,
-  node cap $N_{\max}$, and ensemble capacity $K_{\max}$.
+  \item[\textbf{Batch structure}] Expert batch size $B$, beam width $K_c$,
+  maximum conjunction length $\ell_{\max}$, stale-layer patience $L_s$, and
+  ensemble capacity $K_{\max}$.
 \end{description}
 
 \noindent\textbf{Initialize:} empty ensemble, $b\leftarrow 0$, and empty
@@ -467,16 +429,16 @@ expert-batch buffers.
   \item Compute the head-specific supervision bit $s_t$ and append
   $(x_t,s_t)$ to the current expert batch.
   \item Apply $S$ single-sample head updates using the current activation row.
-  \item After $B$ accumulated observations, grow a graph on the batch, select and
-  compact one output, append it with weight zero, prune to $K_{\max}$ if needed,
-  and clear the expert batch.
+  \item After $B$ accumulated observations, run conjunction beam search on the
+  batch, select one output, append it with weight zero, prune to $K_{\max}$ if
+  needed, and clear the expert batch.
 \end{enumerate}
 
 \paragraph{Cost.}
 Prediction and activation evaluation are linear in the number of experts
-and their node counts.  Each linear step costs one expert evaluation.
-Structural work occurs once per expert batch: graph growth scans selected
-parent pairs over $B$ rows, then compaction produces one expert.
+and their literal counts.  Each linear step costs one expert evaluation.
+Structural work occurs once per expert batch: beam extension scans candidate
+literal extensions over $B$ rows, then one \texttt{ConjunctionExpert} is stored.
 
 \section{API and integration boundaries}
 The \texttt{binaml.models} package owns the online models and has no
@@ -526,8 +488,9 @@ All models receive the scenario width.  Model hyperparameters are versioned in
 \texttt{benchmarks/models.json} and \texttt{benchmarks/models\_classification.json}.
 For regression, \texttt{BRegressor} uses learning rate $\eta=3\times10^{-2}$,
 $\ell_2$ decay $7.5\times10^{-3}$, expert batch size $B=8$, thirty-five
-single-sample SGD steps, parent top-$K_p=8$, pattern length
-$\ell_{\mathrm{pat}}=4$, ensemble capacity $K_{\max}=32$, and $64$ expert nodes per function.
+single-sample SGD steps, beam width $K_c=8$, maximum conjunction length
+$\ell_{\max}=7$, stale-layer patience $L_s=4$, and ensemble capacity
+$K_{\max}=32$.
 The linear baseline uses learning rate $5\times10^{-3}$, decay $1.5\times10^{-2}$,
 replay size $B=1$, three full-batch SGD steps, and uncentered binary inputs.
 The MLP baseline is a JAX two-layer ReLU network with hidden layers of 32 and 32 units,
@@ -547,10 +510,10 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.076\pm0.015$ & $0.270\pm0.029$ & $0.051\pm0.005$ \\
-Linear SGD (JAX) & $0.068\pm0.012$ & $0.256\pm0.026$ & $2.172\pm0.190$ \\
-MLP SGD (JAX) & $0.069\pm0.014$ & $0.255\pm0.030$ & $3.849\pm0.269$ \\
-Last target & $0.078\pm0.020$ & $0.270\pm0.037$ & $0.033\pm0.002$ \\
+BRegressor (ours) & $0.076\pm0.016$ & $0.268\pm0.032$ & $0.076\pm0.001$ \\
+Linear SGD (JAX) & $0.068\pm0.012$ & $0.256\pm0.026$ & $1.336\pm0.009$ \\
+MLP SGD (JAX) & $0.069\pm0.014$ & $0.255\pm0.030$ & $2.303\pm0.077$ \\
+Last target & $0.078\pm0.020$ & $0.270\pm0.037$ & $0.019\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -565,10 +528,10 @@ $p_x=p_g=p_b=0$ and fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.047\pm0.014$ & $0.207\pm0.033$ & $0.037\pm0.002$ \\
-Linear SGD (JAX) & $0.033\pm0.009$ & $0.176\pm0.025$ & $1.330\pm0.081$ \\
-MLP SGD (JAX) & $0.052\pm0.015$ & $0.217\pm0.035$ & $2.417\pm0.092$ \\
-Last target & $0.077\pm0.028$ & $0.255\pm0.054$ & $0.022\pm0.001$ \\
+BRegressor (ours) & $0.056\pm0.018$ & $0.223\pm0.040$ & $0.076\pm0.002$ \\
+Linear SGD (JAX) & $0.033\pm0.009$ & $0.176\pm0.026$ & $1.235\pm0.021$ \\
+MLP SGD (JAX) & $0.052\pm0.015$ & $0.217\pm0.035$ & $2.503\pm0.054$ \\
+Last target & $0.077\pm0.029$ & $0.255\pm0.054$ & $0.019\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -583,10 +546,10 @@ components.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.043\pm0.007$ & $0.204\pm0.017$ & $0.033\pm0.005$ \\
-Linear SGD (JAX) & $0.050\pm0.007$ & $0.220\pm0.017$ & $1.055\pm0.033$ \\
-MLP SGD (JAX) & $0.034\pm0.006$ & $0.183\pm0.014$ & $1.958\pm0.016$ \\
-Last target & $0.034\pm0.006$ & $0.181\pm0.016$ & $0.019\pm0.001$ \\
+BRegressor (ours) & $0.041\pm0.006$ & $0.201\pm0.014$ & $0.072\pm0.003$ \\
+Linear SGD (JAX) & $0.050\pm0.007$ & $0.220\pm0.017$ & $1.232\pm0.036$ \\
+MLP SGD (JAX) & $0.034\pm0.006$ & $0.183\pm0.014$ & $2.471\pm0.027$ \\
+Last target & $0.034\pm0.006$ & $0.181\pm0.016$ & $0.018\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -601,10 +564,10 @@ seven literals.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.050\pm0.006$ & $0.222\pm0.012$ & $0.041\pm0.008$ \\
-Linear SGD (JAX) & $0.055\pm0.006$ & $0.234\pm0.012$ & $1.296\pm0.078$ \\
-MLP SGD (JAX) & $0.040\pm0.004$ & $0.199\pm0.010$ & $2.641\pm0.168$ \\
-Last target & $0.040\pm0.005$ & $0.197\pm0.012$ & $0.024\pm0.001$ \\
+BRegressor (ours) & $0.047\pm0.006$ & $0.215\pm0.015$ & $0.065\pm0.002$ \\
+Linear SGD (JAX) & $0.055\pm0.006$ & $0.234\pm0.012$ & $1.183\pm0.020$ \\
+MLP SGD (JAX) & $0.040\pm0.004$ & $0.199\pm0.011$ & $2.536\pm0.054$ \\
+Last target & $0.040\pm0.005$ & $0.197\pm0.012$ & $0.018\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -623,9 +586,9 @@ class head weights.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/binary.json}, and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
 learning rate $\eta=9\times10^{-2}$, $\ell_2$ decay $5\times10^{-4}$,
-expert batch size $B=8$, thirty-nine single-sample SGD steps, parent top-$K_p=8$,
-pattern length $\ell_{\mathrm{pat}}=4$,
-ensemble capacity $K_{\max}=40$, and $32$ expert nodes per function.  The linear classifier uses
+expert batch size $B=8$, thirty-nine single-sample SGD steps, beam width
+$K_c=8$, maximum conjunction length $\ell_{\max}=7$, stale-layer patience
+$L_s=4$, and ensemble capacity $K_{\max}=40$.  The linear classifier uses
 learning rate $5\times10^{-3}$, no weight decay, replay size $B=1$, and seven SGD steps; the MLP classifier
 baseline uses three ReLU hidden layers of 50, 32, and 16 units, learning rate
 $5\times10^{-3}$, $\alpha=2.5\times10^{-4}$, replay size $B=1$, and nine SGD steps, both with
@@ -645,10 +608,10 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.626\pm0.028$ & $0.059\pm0.005$ \\
-Linear SGD (JAX) & $0.652\pm0.022$ & $1.088\pm0.074$ \\
-MLP SGD (JAX) & $0.646\pm0.020$ & $1.914\pm0.071$ \\
-Last target & $0.623\pm0.026$ & $0.013\pm0.001$ \\
+BClassifier (ours) & $0.621\pm0.026$ & $0.096\pm0.001$ \\
+Linear SGD (JAX) & $0.652\pm0.022$ & $1.561\pm0.168$ \\
+MLP SGD (JAX) & $0.646\pm0.020$ & $1.967\pm0.067$ \\
+Last target & $0.623\pm0.026$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -664,10 +627,10 @@ fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.650\pm0.123$ & $0.062\pm0.002$ \\
-Linear SGD (JAX) & $0.741\pm0.102$ & $1.157\pm0.027$ \\
-MLP SGD (JAX) & $0.688\pm0.115$ & $2.186\pm0.027$ \\
-Last target & $0.590\pm0.142$ & $0.015\pm0.000$ \\
+BClassifier (ours) & $0.625\pm0.132$ & $0.088\pm0.003$ \\
+Linear SGD (JAX) & $0.741\pm0.102$ & $1.015\pm0.016$ \\
+MLP SGD (JAX) & $0.688\pm0.115$ & $2.073\pm0.031$ \\
+Last target & $0.590\pm0.142$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -682,10 +645,10 @@ conjunction $f_0$ with the same multiclass head sampling as the default.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.668\pm0.022$ & $0.060\pm0.001$ \\
-Linear SGD (JAX) & $0.676\pm0.022$ & $1.132\pm0.028$ \\
-MLP SGD (JAX) & $0.680\pm0.021$ & $2.113\pm0.037$ \\
-Last target & $0.668\pm0.022$ & $0.015\pm0.000$ \\
+BClassifier (ours) & $0.664\pm0.020$ & $0.087\pm0.001$ \\
+Linear SGD (JAX) & $0.676\pm0.022$ & $1.026\pm0.029$ \\
+MLP SGD (JAX) & $0.680\pm0.021$ & $2.057\pm0.039$ \\
+Last target & $0.668\pm0.022$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -700,10 +663,10 @@ uses one fixed conjunction $f_0$ whose clause has three to seven literals.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.655\pm0.025$ & $0.061\pm0.001$ \\
-Linear SGD (JAX) & $0.674\pm0.023$ & $1.150\pm0.022$ \\
-MLP SGD (JAX) & $0.676\pm0.022$ & $2.117\pm0.033$ \\
-Last target & $0.658\pm0.024$ & $0.015\pm0.000$ \\
+BClassifier (ours) & $0.648\pm0.023$ & $0.090\pm0.002$ \\
+Linear SGD (JAX) & $0.674\pm0.023$ & $1.065\pm0.016$ \\
+MLP SGD (JAX) & $0.676\pm0.022$ & $2.002\pm0.046$ \\
+Last target & $0.658\pm0.024$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}

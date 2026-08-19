@@ -1,6 +1,6 @@
 use binaml_core::{
-    BClassifier, BRegressor, FunctionBuildConfig, FunctionBuilder, FunctionModel, SignBatch,
-    DEFAULT_L_PAT, DEFAULT_MAX_EXPERT_NODES,
+    BClassifier, BRegressor, ConjunctionBuildConfig, ConjunctionBuilder, ConjunctionExpert,
+    DEFAULT_MAX_CONJUNCTION_LENGTH, DEFAULT_MAX_EXPERTS, DEFAULT_STALE_LAYERS, SignBatch,
 };
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -97,33 +97,39 @@ fn sign_batch_from_arrays(
 }
 
 #[pyclass]
-struct FunctionLearner {
-    parent_top_k: usize,
-    l_pat: usize,
-    model: Option<FunctionModel>,
+struct ConjunctionLearner {
+    max_conjunctions: usize,
+    max_conjunction_length: usize,
+    stale_layers: usize,
+    expert: Option<ConjunctionExpert>,
 }
 
-impl FunctionLearner {
-    fn build_config(&self, batch_size: usize, source_count: usize) -> FunctionBuildConfig {
-        FunctionBuildConfig::new(
+impl ConjunctionLearner {
+    fn build_config(&self, batch_size: usize) -> ConjunctionBuildConfig {
+        ConjunctionBuildConfig::new(
             batch_size,
-            self.parent_top_k,
-            source_count,
-            DEFAULT_MAX_EXPERT_NODES,
-            self.l_pat,
+            self.max_conjunctions,
+            self.max_conjunction_length,
+            DEFAULT_MAX_EXPERTS,
+            self.stale_layers,
         )
     }
 }
 
 #[pymethods]
-impl FunctionLearner {
+impl ConjunctionLearner {
     #[new]
-    #[pyo3(signature = (parent_top_k=8, l_pat=DEFAULT_L_PAT))]
-    fn new(parent_top_k: usize, l_pat: usize) -> Self {
+    #[pyo3(signature = (max_conjunctions=8, max_conjunction_length=DEFAULT_MAX_CONJUNCTION_LENGTH, stale_layers=DEFAULT_STALE_LAYERS))]
+    fn new(
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
+        stale_layers: usize,
+    ) -> Self {
         Self {
-            parent_top_k,
-            l_pat,
-            model: None,
+            max_conjunctions,
+            max_conjunction_length,
+            stale_layers,
+            expert: None,
         }
     }
 
@@ -137,10 +143,9 @@ impl FunctionLearner {
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
         let batch = SignBatch::from_columns(&column_refs, &signs);
         let started = Instant::now();
-        let (model, score) =
-            FunctionBuilder::fit(batch, self.build_config(batch_size, column_refs.len()))
-                .map_err(model_error)?;
-        self.model = Some(model);
+        let (expert, score) =
+            ConjunctionBuilder::fit(batch, self.build_config(batch_size)).map_err(model_error)?;
+        self.expert = Some(expert);
         let dict = PyDict::new(py);
         dict.set_item("score", i64::from(score))?;
         dict.set_item("elapsed_seconds", started.elapsed().as_secs_f64())?;
@@ -152,15 +157,15 @@ impl FunctionLearner {
         py: Python<'py>,
         features: PyReadonlyArray2<'_, u8>,
     ) -> PyResult<Bound<'py, PyArray1<bool>>> {
-        let model = self
-            .model
+        let expert = self
+            .expert
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("learner is not fit"))?;
         let (columns, batch_size) = feature_batch(features)?;
         let dummy_signs = vec![false; batch_size];
         let column_refs: Vec<&[bool]> = columns.iter().map(Vec::as_slice).collect();
         let batch = SignBatch::from_columns(&column_refs, &dummy_signs);
-        let predictions = FunctionBuilder::predict(model, batch).map_err(model_error)?;
+        let predictions = ConjunctionBuilder::predict(expert, batch).map_err(model_error)?;
         predictions_to_py(py, predictions)
     }
 
@@ -175,7 +180,7 @@ impl FunctionLearner {
         let batch = SignBatch::from_columns(&column_refs, &signs);
         let started = Instant::now();
         let (predictions, score) =
-            FunctionBuilder::fit_predict(batch, self.build_config(batch_size, column_refs.len()))
+            ConjunctionBuilder::fit_predict(batch, self.build_config(batch_size))
                 .map_err(model_error)?;
         fit_result_to_py(
             py,
@@ -194,7 +199,7 @@ struct BRegressorCore {
 #[pymethods]
 impl BRegressorCore {
     #[new]
-    #[pyo3(signature = (source_feature_count, learning_rate=DEFAULT_LEARNING_RATE, l2=DEFAULT_L2, batch_size=16, sgd_steps=DEFAULT_SGD_STEPS, parent_top_k=8, max_functions=64, max_expert_nodes=DEFAULT_MAX_EXPERT_NODES, l_pat=DEFAULT_L_PAT))]
+    #[pyo3(signature = (source_feature_count, learning_rate=DEFAULT_LEARNING_RATE, l2=DEFAULT_L2, batch_size=16, sgd_steps=DEFAULT_SGD_STEPS, max_conjunctions=8, max_conjunction_length=DEFAULT_MAX_CONJUNCTION_LENGTH, max_functions=64, max_experts=DEFAULT_MAX_EXPERTS, stale_layers=DEFAULT_STALE_LAYERS))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
@@ -202,10 +207,11 @@ impl BRegressorCore {
         l2: f32,
         batch_size: usize,
         sgd_steps: usize,
-        parent_top_k: usize,
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
         max_functions: usize,
-        max_expert_nodes: usize,
-        l_pat: usize,
+        max_experts: usize,
+        stale_layers: usize,
     ) -> PyResult<Self> {
         Ok(Self {
             model: BRegressor::with_hyperparameters(
@@ -214,10 +220,11 @@ impl BRegressorCore {
                 l2,
                 batch_size,
                 sgd_steps,
-                parent_top_k,
+                max_conjunctions,
+                max_conjunction_length,
                 max_functions,
-                max_expert_nodes,
-                l_pat,
+                max_experts,
+                stale_layers,
             )
             .map_err(model_error)?,
         })
@@ -261,7 +268,7 @@ struct BClassifierCore {
 #[pymethods]
 impl BClassifierCore {
     #[new]
-    #[pyo3(signature = (source_feature_count, n_classes, learning_rate=DEFAULT_CLASSIFIER_LEARNING_RATE, l2=DEFAULT_L2, batch_size=DEFAULT_CLASSIFIER_BATCH_SIZE, sgd_steps=DEFAULT_CLASSIFIER_SGD_STEPS, parent_top_k=8, max_functions=96, max_expert_nodes=DEFAULT_MAX_EXPERT_NODES, l_pat=DEFAULT_L_PAT))]
+    #[pyo3(signature = (source_feature_count, n_classes, learning_rate=DEFAULT_CLASSIFIER_LEARNING_RATE, l2=DEFAULT_L2, batch_size=DEFAULT_CLASSIFIER_BATCH_SIZE, sgd_steps=DEFAULT_CLASSIFIER_SGD_STEPS, max_conjunctions=8, max_conjunction_length=DEFAULT_MAX_CONJUNCTION_LENGTH, max_functions=96, max_experts=DEFAULT_MAX_EXPERTS, stale_layers=DEFAULT_STALE_LAYERS))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         source_feature_count: usize,
@@ -270,10 +277,11 @@ impl BClassifierCore {
         l2: f32,
         batch_size: usize,
         sgd_steps: usize,
-        parent_top_k: usize,
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
         max_functions: usize,
-        max_expert_nodes: usize,
-        l_pat: usize,
+        max_experts: usize,
+        stale_layers: usize,
     ) -> PyResult<Self> {
         Ok(Self {
             model: BClassifier::with_hyperparameters(
@@ -283,10 +291,11 @@ impl BClassifierCore {
                 l2,
                 batch_size,
                 sgd_steps,
-                parent_top_k,
+                max_conjunctions,
+                max_conjunction_length,
                 max_functions,
-                max_expert_nodes,
-                l_pat,
+                max_experts,
+                stale_layers,
             )
             .map_err(model_error)?,
         })
@@ -325,6 +334,6 @@ impl BClassifierCore {
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<BRegressorCore>()?;
     module.add_class::<BClassifierCore>()?;
-    module.add_class::<FunctionLearner>()?;
+    module.add_class::<ConjunctionLearner>()?;
     Ok(())
 }

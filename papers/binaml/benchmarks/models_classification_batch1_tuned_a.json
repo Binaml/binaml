@@ -8,7 +8,7 @@
         "l2": 0.0005,
         "batch_size": 1,
         "sgd_steps": 20,
-        "l_pat": 5
+        "stale_layers": 5
       }
     },
     {

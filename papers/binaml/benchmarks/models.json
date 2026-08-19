@@ -6,11 +6,11 @@
       "parameters": {
         "batch_size": 8,
         "l2": 0.0075,
-        "l_pat": 4,
+        "stale_layers": 4,
         "learning_rate": 0.03,
-        "max_expert_nodes": 64,
+        "max_experts": 64,
         "max_functions": 32,
-        "parent_top_k": 8,
+        "max_conjunctions": 8,
         "sgd_steps": 35
       }
     },

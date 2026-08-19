@@ -12,7 +12,7 @@ DEFAULT_LEARNING_RATE = 0.03
 
 
 class BRegressor(PredictUpdateState):
-    """Online regression over an ensemble of batch-learned boolean functions."""
+    """Online regression over an ensemble of batch-learned conjunction experts."""
 
     def __init__(
         self,
@@ -21,10 +21,11 @@ class BRegressor(PredictUpdateState):
         l2: float = 5e-4,
         batch_size: int = 16,
         sgd_steps: int = 20,
-        parent_top_k: int = 8,
+        max_conjunctions: int = 8,
+        max_conjunction_length: int = 7,
         max_functions: int = 64,
-        max_expert_nodes: int = 64,
-        l_pat: int = 2,
+        max_experts: int = 64,
+        stale_layers: int = 2,
     ) -> None:
         super().__init__()
         if (
@@ -42,9 +43,9 @@ class BRegressor(PredictUpdateState):
             or isinstance(max_functions, bool)
             or not isinstance(max_functions, int)
             or max_functions < 1
-            or isinstance(l_pat, bool)
-            or not isinstance(l_pat, int)
-            or l_pat < 1
+            or isinstance(stale_layers, bool)
+            or not isinstance(stale_layers, int)
+            or stale_layers < 1
         ):
             raise ValueError("invalid feature regressor configuration")
         self.n_features = n_features
@@ -56,10 +57,11 @@ class BRegressor(PredictUpdateState):
             l2,
             batch_size,
             sgd_steps,
-            parent_top_k,
+            max_conjunctions,
+            max_conjunction_length,
             max_functions,
-            max_expert_nodes,
-            l_pat,
+            max_experts,
+            stale_layers,
         )
 
     def predict(self, features: np.ndarray) -> float:

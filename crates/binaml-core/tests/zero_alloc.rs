@@ -1,6 +1,6 @@
 use binaml_core::{
-    BClassifier, BRegressor, FunctionBuildConfig, FunctionBuildSession, SignBatch, DEFAULT_L_PAT,
-    DEFAULT_MAX_EXPERT_NODES,
+    BClassifier, BRegressor, ConjunctionBuildConfig, ConjunctionBuildSession, SignBatch,
+    DEFAULT_MAX_CONJUNCTION_LENGTH, DEFAULT_MAX_EXPERTS, DEFAULT_STALE_LAYERS,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,8 +34,10 @@ fn alloc_count() -> usize {
 #[test]
 fn zero_alloc_after_new_on_ensemble_hot_paths() {
     {
-        let mut model =
-            BRegressor::with_hyperparameters(4, 0.1, 0.0, 4, 1, 4, 8, 32, 2).expect("valid config");
+        let mut model = BRegressor::with_hyperparameters(
+            4, 0.1, 0.0, 4, 1, 4, DEFAULT_MAX_CONJUNCTION_LENGTH, 8, 32, 2,
+        )
+        .expect("valid config");
         reset_alloc_counter();
 
         for step in 0..12 {
@@ -53,8 +55,20 @@ fn zero_alloc_after_new_on_ensemble_hot_paths() {
     }
 
     {
-        let mut model = BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, 1, 1, 8, 8, 64, 2)
-            .expect("valid config");
+        let mut model = BClassifier::with_hyperparameters(
+            2,
+            3,
+            0.1,
+            0.0,
+            1,
+            1,
+            8,
+            DEFAULT_MAX_CONJUNCTION_LENGTH,
+            8,
+            64,
+            2,
+        )
+        .expect("valid config");
         reset_alloc_counter();
 
         for step in 0..12 {
@@ -76,8 +90,14 @@ fn zero_alloc_after_new_on_ensemble_hot_paths() {
     }
 
     {
-        let config = FunctionBuildConfig::new(4, 2, 2, DEFAULT_MAX_EXPERT_NODES, DEFAULT_L_PAT);
-        let mut session = FunctionBuildSession::new(config, 2).expect("valid config");
+        let config = ConjunctionBuildConfig::new(
+            4,
+            2,
+            DEFAULT_MAX_CONJUNCTION_LENGTH,
+            DEFAULT_MAX_EXPERTS,
+            DEFAULT_STALE_LAYERS,
+        );
+        let mut session = ConjunctionBuildSession::new(config, 2).expect("valid config");
         reset_alloc_counter();
         let first = [false, true, false, true];
         let second = [false, false, true, true];
@@ -91,7 +111,7 @@ fn zero_alloc_after_new_on_ensemble_hot_paths() {
         assert_eq!(
             alloc_count(),
             0,
-            "function build session allocated after construction"
+            "conjunction build session allocated after construction"
         );
     }
 }

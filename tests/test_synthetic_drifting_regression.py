@@ -129,7 +129,7 @@ def test_feature_regressor_runs_on_the_binary_synthetic_stream() -> None:
         learning_rate=0.05,
         l2=0.01,
         batch_size=2,
-        parent_top_k=2,
+        max_conjunctions=2,
         max_functions=4,
     )
     result = evaluate_prequentially(model, SyntheticDriftingRegressionStream(config, 1), 8)

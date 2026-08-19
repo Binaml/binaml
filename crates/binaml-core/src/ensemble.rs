@@ -1,6 +1,7 @@
-use crate::function_compact::{compact_build_workspace_into, CompactError};
+use crate::conjunction_builder::ConjunctionBuilder;
+use crate::conjunction_expert::ConjunctionExpert;
 use crate::workspace::{EnsembleWorkspace, ModelCapacity, WorkspaceError};
-use crate::{FunctionBuildConfig, FunctionBuildError, FunctionBuilder, FunctionGraph, SignBatch};
+use crate::{ConjunctionBuildConfig, ConjunctionBuildError, SignBatch};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EnsembleConfig {
@@ -8,10 +9,11 @@ pub(crate) struct EnsembleConfig {
     pub l2: f32,
     pub sgd_steps: usize,
     pub batch_size: usize,
-    pub parent_top_k: usize,
+    pub max_conjunctions: usize,
+    pub max_conjunction_length: usize,
     pub max_functions: usize,
-    pub max_expert_nodes: usize,
-    pub l_pat: usize,
+    pub max_experts: usize,
+    pub stale_layers: usize,
 }
 
 impl EnsembleConfig {
@@ -19,9 +21,10 @@ impl EnsembleConfig {
         let capacity = ModelCapacity::new(
             source_feature_count,
             self.batch_size,
-            self.parent_top_k,
+            self.max_conjunctions,
+            self.max_conjunction_length,
             self.max_functions,
-            self.max_expert_nodes,
+            self.max_experts,
             0,
         );
         if source_feature_count == 0
@@ -31,9 +34,10 @@ impl EnsembleConfig {
             || !self.l2.is_finite()
             || self.l2 < 0.0
             || self.sgd_steps == 0
-            || self.parent_top_k < 2
-            || self.max_expert_nodes == 0
-            || self.l_pat == 0
+            || self.max_conjunctions == 0
+            || self.max_conjunction_length == 0
+            || self.max_experts == 0
+            || self.stale_layers == 0
             || capacity.validate().is_err()
         {
             return Err(EnsembleError::InvalidConfig);
@@ -41,23 +45,24 @@ impl EnsembleConfig {
         Ok(())
     }
 
-    fn build_config(&self, source_feature_count: usize) -> FunctionBuildConfig {
-        FunctionBuildConfig::new(
-            self.batch_size,
-            self.parent_top_k,
-            source_feature_count,
-            self.max_expert_nodes,
-            self.l_pat,
-        )
+    fn build_config(&self) -> ConjunctionBuildConfig {
+        ConjunctionBuildConfig {
+            batch_size: self.batch_size,
+            max_conjunctions: self.max_conjunctions,
+            max_conjunction_length: self.max_conjunction_length,
+            max_experts: self.max_experts,
+            stale_layers: self.stale_layers,
+        }
     }
 
     fn capacity(&self, source_feature_count: usize, n_classes: usize) -> ModelCapacity {
         ModelCapacity::new(
             source_feature_count,
             self.batch_size,
-            self.parent_top_k,
+            self.max_conjunctions,
+            self.max_conjunction_length,
             self.max_functions,
-            self.max_expert_nodes,
+            self.max_experts,
             n_classes,
         )
     }
@@ -70,20 +75,14 @@ pub(crate) enum EnsembleError {
     PendingPrediction,
     NoPendingPrediction,
     Build,
-    Compact,
+    Expert,
 }
 
-impl From<FunctionBuildError> for EnsembleError {
-    fn from(_: FunctionBuildError) -> Self {
-        Self::Build
-    }
-}
-
-impl From<CompactError> for EnsembleError {
-    fn from(error: CompactError) -> Self {
+impl From<ConjunctionBuildError> for EnsembleError {
+    fn from(error: ConjunctionBuildError) -> Self {
         match error {
-            CompactError::ExpertTooLarge => Self::Compact,
-            CompactError::InvalidOutput => Self::Build,
+            ConjunctionBuildError::ExpertTooLarge => Self::Expert,
+            _ => Self::Build,
         }
     }
 }
@@ -111,7 +110,7 @@ pub(crate) struct BooleanEnsemble<H: EnsembleHead> {
     pub config: EnsembleConfig,
     pub source_feature_count: usize,
     pub head: H,
-    pub functions: Box<[FunctionGraph]>,
+    pub functions: Box<[ConjunctionExpert]>,
     pub n_observed: usize,
     pub(crate) workspace: EnsembleWorkspace,
     pending: bool,
@@ -128,7 +127,7 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         let capacity = config.capacity(source_feature_count, n_classes);
         let workspace = EnsembleWorkspace::new(capacity)?;
         let functions = (0..config.max_functions)
-            .map(|_| FunctionGraph::empty(source_feature_count, config.max_expert_nodes))
+            .map(|_| ConjunctionExpert::empty())
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Ok(Self {
@@ -160,8 +159,7 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         self.workspace.pending_features.copy_from_slice(features);
         let count = self.function_count();
         for index in 0..count {
-            self.workspace.function_values[index] = self.functions[index]
-                .evaluate_with_scratch(features, &mut self.workspace.eval_scratch);
+            self.workspace.function_values[index] = self.functions[index].evaluate(features);
         }
         self.workspace.pending_function_values[..count]
             .copy_from_slice(&self.workspace.function_values[..count]);
@@ -207,22 +205,21 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
 
     fn finish_batch(&mut self) -> Result<(), EnsembleError> {
         let batch_size = self.config.batch_size;
-        let build_config = self.config.build_config(self.source_feature_count);
+        let build_config = self.config.build_config();
         let feature_count = self.source_feature_count;
-        let max_expert_nodes = self.config.max_expert_nodes;
-        let (output, invert_output) = {
-            let workspace = &mut self.workspace;
-            let batch = SignBatch::from_flat(
-                &workspace.batch_features[..batch_size * feature_count],
-                batch_size,
-                feature_count,
-                &workspace.batch_signs[..batch_size],
-            );
-            match FunctionBuilder::build_in_workspace(batch, build_config, &mut workspace.build) {
-                Ok(result) => result,
-                Err(FunctionBuildError::InvalidBatch) => return Ok(()),
-                Err(error) => return Err(error.into()),
-            }
+        let key_words = self.workspace.build.key_words;
+        let max_conjunction_length = self.config.max_conjunction_length;
+
+        let chosen = match self.try_build_expert(
+            build_config,
+            batch_size,
+            feature_count,
+            key_words,
+            max_conjunction_length,
+            true,
+        )? {
+            Some(candidate) => candidate,
+            None => return Ok(()),
         };
 
         if self.head.active() >= self.config.max_functions {
@@ -237,16 +234,71 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         }
 
         let slot = self.head.active();
-        compact_build_workspace_into(
-            &mut self.workspace.build,
-            output,
-            invert_output,
-            max_expert_nodes,
-            &mut self.functions[slot],
-        )?;
+        self.functions[slot] = chosen.0;
         self.head.append_function();
         Ok(())
     }
+
+    fn try_build_expert(
+        &mut self,
+        build_config: ConjunctionBuildConfig,
+        batch_size: usize,
+        feature_count: usize,
+        key_words: usize,
+        max_conjunction_length: usize,
+        use_direct_signs: bool,
+    ) -> Result<Option<(ConjunctionExpert, u8)>, EnsembleError> {
+        let workspace = &mut self.workspace;
+        let train_signs = if use_direct_signs {
+            &workspace.batch_signs[..batch_size]
+        } else {
+            &workspace.batch_signs_inverted[..batch_size]
+        };
+        let batch = SignBatch::from_flat(
+            &workspace.batch_features[..batch_size * feature_count],
+            batch_size,
+            feature_count,
+            train_signs,
+        );
+        let winner = match ConjunctionBuilder::build_in_workspace(batch, build_config, &mut workspace.build)
+        {
+            Ok(result) => result,
+            Err(ConjunctionBuildError::InvalidBatch) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let expert = match ConjunctionExpert::from_key(
+            &winner.key,
+            key_words,
+            feature_count,
+            max_conjunction_length,
+        ) {
+            Ok(expert) => expert,
+            Err(ConjunctionBuildError::ExpertTooLarge) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let accuracy = expert_batch_accuracy(workspace, &expert, batch_size, feature_count);
+        Ok(Some((expert, accuracy)))
+    }
+}
+
+fn expert_batch_accuracy(
+    workspace: &mut EnsembleWorkspace,
+    expert: &ConjunctionExpert,
+    batch_size: usize,
+    feature_count: usize,
+) -> u8 {
+    let mut matches = 0_u8;
+    for row in 0..batch_size {
+        for feature in 0..feature_count {
+            workspace.pending_features[feature] =
+                workspace.batch_features[feature * batch_size + row];
+        }
+        if expert.evaluate(&workspace.pending_features[..feature_count]) == workspace.batch_signs[row]
+        {
+            matches += 1;
+        }
+    }
+    matches
 }
 
 #[derive(Debug)]

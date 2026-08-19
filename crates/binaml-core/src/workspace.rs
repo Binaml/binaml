@@ -1,55 +1,63 @@
-use crate::function_build_common::{
-    derive_build_capacity, BuildNodeId, EphemeralNode, PairCandidate,
+use crate::conjunction_build_common::{
+    derive_conjunction_capacity, BeamEntry, ConjunctionBuildConfig, ExtensionCandidate,
+    MAX_BATCH_SIZE,
 };
-use crate::function_graph::CompactNode;
-use crate::FeatureCounter;
 use crate::SignBatch;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModelCapacity {
     pub source_feature_count: usize,
     pub batch_size: usize,
-    pub parent_top_k: usize,
+    pub max_conjunctions: usize,
+    pub max_conjunction_length: usize,
+    pub max_experts: usize,
     pub max_functions: usize,
-    pub max_expert_nodes: usize,
     pub n_classes: usize,
-    pub l_build: usize,
-    pub pair_count: usize,
-    pub graph_nodes: usize,
+    pub max_extensions: usize,
+    pub key_words: usize,
 }
 
 impl ModelCapacity {
     pub fn new(
         source_feature_count: usize,
         batch_size: usize,
-        parent_top_k: usize,
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
         max_functions: usize,
-        max_expert_nodes: usize,
+        max_experts: usize,
         n_classes: usize,
     ) -> Self {
-        let (l_build, pair_count, graph_nodes) =
-            derive_build_capacity(source_feature_count, parent_top_k, max_expert_nodes);
+        let derived = derive_conjunction_capacity(
+            source_feature_count,
+            ConjunctionBuildConfig {
+                batch_size,
+                max_conjunctions,
+                max_conjunction_length,
+                max_experts,
+                stale_layers: 1,
+            },
+        );
         Self {
             source_feature_count,
             batch_size,
-            parent_top_k,
+            max_conjunctions,
+            max_conjunction_length,
+            max_experts,
             max_functions,
-            max_expert_nodes,
             n_classes,
-            l_build,
-            pair_count,
-            graph_nodes,
+            max_extensions: derived.max_extensions,
+            key_words: derived.key_words,
         }
     }
 
     pub fn validate(&self) -> Result<(), WorkspaceError> {
         if self.source_feature_count == 0
             || self.batch_size == 0
-            || self.parent_top_k < 2
+            || self.max_conjunctions == 0
+            || self.max_conjunction_length == 0
             || self.max_functions == 0
-            || self.max_expert_nodes == 0
-            || self.max_expert_nodes >= self.graph_nodes
-            || self.batch_size > FeatureCounter::MAX_BATCH_SIZE
+            || self.max_experts == 0
+            || self.batch_size > MAX_BATCH_SIZE
         {
             return Err(WorkspaceError::InvalidConfig);
         }
@@ -62,236 +70,112 @@ pub enum WorkspaceError {
     InvalidConfig,
 }
 
-const NO_SLOT: u16 = u16::MAX;
-
+/// One depth of the beam: conjunctions with exactly `depth + 1` literals.
 #[derive(Debug)]
-pub(crate) struct FlatColumnCache {
-    columns: Box<[bool]>,
-    slot_for_id: Box<[u16]>,
-    batch_size: usize,
-    parent_top_k: usize,
+pub(crate) struct DepthLayer {
+    pub entries: Box<[BeamEntry]>,
+    pub columns: Box<[bool]>,
+    pub len: usize,
 }
 
-impl FlatColumnCache {
-    pub(crate) fn new(batch_size: usize, parent_top_k: usize, graph_nodes: usize) -> Self {
-        let column_slots = parent_top_k * 2;
+impl DepthLayer {
+    fn new(max_conjunctions: usize, batch_size: usize) -> Self {
         Self {
-            columns: vec![false; column_slots * batch_size].into_boxed_slice(),
-            slot_for_id: vec![NO_SLOT; graph_nodes].into_boxed_slice(),
-            batch_size,
-            parent_top_k: column_slots,
-        }
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.slot_for_id.fill(NO_SLOT);
-    }
-
-    pub(crate) fn ensure(
-        &mut self,
-        nodes: &[EphemeralNode],
-        batch: SignBatch<'_>,
-        id: BuildNodeId,
-    ) -> Result<(), ColumnCacheError> {
-        if id.0 >= self.slot_for_id.len() {
-            return Err(ColumnCacheError::GraphCapacity);
-        }
-        if self.slot_for_id[id.0] != NO_SLOT {
-            return Ok(());
-        }
-        let slot = (0..self.parent_top_k)
-            .find(|candidate| {
-                !self
-                    .slot_for_id
-                    .iter()
-                    .any(|&mapped| mapped != NO_SLOT && mapped as usize == *candidate)
-            })
-            .ok_or(ColumnCacheError::ColumnCapacity)?;
-        self.compute_into_slot(nodes, batch, id, slot)?;
-        self.slot_for_id[id.0] = u16::try_from(slot).expect("slot fits in u16");
-        Ok(())
-    }
-
-    pub(crate) fn column(&self, id: BuildNodeId) -> &[bool] {
-        let slot = self.slot_for_id[id.0] as usize;
-        let start = slot * self.batch_size;
-        &self.columns[start..start + self.batch_size]
-    }
-
-    pub(crate) fn retain_only(&mut self, keep: &[BuildNodeId]) {
-        let mut next_slot = 0_usize;
-        for &id in keep {
-            let old_slot = self.slot_for_id[id.0];
-            if old_slot == NO_SLOT {
-                continue;
-            }
-            let old_slot = old_slot as usize;
-            let dst_start = next_slot * self.batch_size;
-            let src_start = old_slot * self.batch_size;
-            if src_start != dst_start {
-                self.columns
-                    .copy_within(src_start..src_start + self.batch_size, dst_start);
-            }
-            next_slot += 1;
-        }
-        self.slot_for_id.fill(NO_SLOT);
-        for (slot, &id) in keep.iter().enumerate() {
-            self.slot_for_id[id.0] = u16::try_from(slot).expect("slot fits in u16");
-        }
-    }
-
-    fn compute_into_slot(
-        &mut self,
-        nodes: &[EphemeralNode],
-        batch: crate::SignBatch<'_>,
-        id: BuildNodeId,
-        slot: usize,
-    ) -> Result<(), ColumnCacheError> {
-        let start = slot * self.batch_size;
-        match nodes[id.0] {
-            EphemeralNode::Source { input_index } => {
-                let column = batch
-                    .column(input_index)
-                    .ok_or(ColumnCacheError::InvalidBatch)?;
-                self.columns[start..start + self.batch_size].copy_from_slice(column);
-            }
-            EphemeralNode::Composed {
-                first,
-                second,
-                truth_table,
-            } => {
-                self.ensure(nodes, batch, first)?;
-                self.ensure(nodes, batch, second)?;
-                let first_start = self.slot_for_id[first.0] as usize * self.batch_size;
-                let second_start = self.slot_for_id[second.0] as usize * self.batch_size;
-                for index in 0..self.batch_size {
-                    let first_value = self.columns[first_start + index];
-                    let second_value = self.columns[second_start + index];
-                    self.columns[start + index] = crate::boolean_circuit::evaluate_truth_table(
-                        truth_table,
-                        first_value,
-                        second_value,
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColumnCacheError {
-    InvalidBatch,
-    GraphCapacity,
-    ColumnCapacity,
-}
-
-#[derive(Debug)]
-pub(crate) struct BuildWorkspace {
-    pub nodes: Box<[EphemeralNode]>,
-    pub node_len: usize,
-    pub association_scores: Box<[i64]>,
-    pub accuracy_scores: Box<[u8]>,
-    pub layer_ids: Box<[BuildNodeId]>,
-    pub layer_ends: Box<[u16]>,
-    pub layer_count: u16,
-    pub parent_buf: Box<[BuildNodeId]>,
-    pub rank_scratch: Box<[BuildNodeId]>,
-    pub column_cache: FlatColumnCache,
-    pub pair_scratch: Box<[FeatureCounter]>,
-    pub pair_candidates: Box<[PairCandidate]>,
-    pub compact_nodes: Box<[CompactNode]>,
-    pub compact_sources: Box<[usize]>,
-    pub compact_slots: Box<[crate::function_compact::CompactSlot]>,
-    pub compact_aliases: Box<[u32]>,
-    pub compact_reachable: Box<[bool]>,
-    pub compact_old_to_new: Box<[u16]>,
-    pub compact_order: Box<[u16]>,
-}
-
-impl BuildWorkspace {
-    pub fn new(capacity: ModelCapacity) -> Self {
-        let v = capacity.graph_nodes;
-        let p = capacity.pair_count;
-        let k_p = capacity.parent_top_k;
-        let l_build = capacity.l_build;
-        let max_layer_ids = k_p * (l_build + 1);
-        Self {
-            nodes: vec![EphemeralNode::Source { input_index: 0 }; v].into_boxed_slice(),
-            node_len: 0,
-            association_scores: vec![0_i64; v].into_boxed_slice(),
-            accuracy_scores: vec![0_u8; v].into_boxed_slice(),
-            layer_ids: vec![BuildNodeId(0); max_layer_ids].into_boxed_slice(),
-            layer_ends: vec![0_u16; l_build + 2].into_boxed_slice(),
-            layer_count: 1,
-            parent_buf: vec![BuildNodeId(0); k_p].into_boxed_slice(),
-            rank_scratch: vec![BuildNodeId(0); v].into_boxed_slice(),
-            column_cache: FlatColumnCache::new(capacity.batch_size, capacity.parent_top_k, v),
-            pair_scratch: vec![FeatureCounter::default(); p].into_boxed_slice(),
-            pair_candidates: vec![
-                PairCandidate {
-                    first: BuildNodeId(0),
-                    second: BuildNodeId(0),
-                    truth_table: 0,
+            entries: vec![
+                BeamEntry {
+                    key: crate::conjunction_build_common::ConjunctionKey::EMPTY,
                     abs_assoc: 0,
-                    matches: 0,
+                    accuracy: 0,
+                    column_slot: 0,
                 };
-                p
+                max_conjunctions
             ]
             .into_boxed_slice(),
-            compact_nodes: vec![CompactNode::Constant(false); capacity.max_expert_nodes]
-                .into_boxed_slice(),
-            compact_sources: vec![0_usize; capacity.source_feature_count].into_boxed_slice(),
-            compact_slots: vec![crate::function_compact::CompactSlot::default(); v]
-                .into_boxed_slice(),
-            compact_aliases: vec![crate::function_compact::NO_ALIAS; v].into_boxed_slice(),
-            compact_reachable: vec![false; v].into_boxed_slice(),
-            compact_old_to_new: vec![crate::function_compact::NO_MAP; v].into_boxed_slice(),
-            compact_order: vec![0_u16; v].into_boxed_slice(),
+            columns: vec![false; max_conjunctions * batch_size].into_boxed_slice(),
+            len: 0,
         }
     }
 
     pub fn reset(&mut self) {
-        self.node_len = 0;
-        self.layer_count = 1;
-        self.layer_ends[0] = 0;
-        self.layer_ends[1] = 0;
-        self.column_cache.reset();
+        self.len = 0;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ConjunctionBuildWorkspace {
+    pub literal_columns: Box<[bool]>,
+    pub layers: Box<[DepthLayer]>,
+    pub extension_buf: Box<[ExtensionCandidate]>,
+    pub dedup_buf: Box<[ExtensionCandidate]>,
+    pub z_scratch: Box<[bool]>,
+    pub sort_scratch: Box<[usize]>,
+    pub batch_size: usize,
+    pub feature_count: usize,
+    pub key_words: usize,
+    pub max_conjunction_length: usize,
+}
+
+impl ConjunctionBuildWorkspace {
+    pub fn new(capacity: ModelCapacity) -> Self {
+        let d = capacity.source_feature_count;
+        let b = capacity.batch_size;
+        let k_c = capacity.max_conjunctions;
+        let l_max = capacity.max_conjunction_length;
+        let max_extensions = capacity.max_extensions;
+        Self {
+            literal_columns: vec![false; 2 * d * b].into_boxed_slice(),
+            layers: (0..l_max)
+                .map(|_| DepthLayer::new(k_c, b))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            extension_buf: vec![
+                ExtensionCandidate {
+                    key: crate::conjunction_build_common::ConjunctionKey::EMPTY,
+                    abs_assoc: 0,
+                    accuracy: 0,
+                    parent_slot: 0,
+                    literal_index: 0,
+                };
+                max_extensions
+            ]
+            .into_boxed_slice(),
+            dedup_buf: vec![
+                ExtensionCandidate {
+                    key: crate::conjunction_build_common::ConjunctionKey::EMPTY,
+                    abs_assoc: 0,
+                    accuracy: 0,
+                    parent_slot: 0,
+                    literal_index: 0,
+                };
+                max_extensions
+            ]
+            .into_boxed_slice(),
+            z_scratch: vec![false; b].into_boxed_slice(),
+            sort_scratch: (0..max_extensions).collect::<Vec<_>>().into_boxed_slice(),
+            batch_size: b,
+            feature_count: d,
+            key_words: capacity.key_words,
+            max_conjunction_length: l_max,
+        }
     }
 
-    pub fn layer(&self, index: usize) -> &[BuildNodeId] {
-        let start = self.layer_ends[index] as usize;
-        let end = self.layer_ends[index + 1] as usize;
-        &self.layer_ids[start..end]
+    pub fn reset(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.reset();
+        }
     }
 
-    pub fn current_layer(&self) -> &[BuildNodeId] {
-        let index = self.layer_count as usize - 1;
-        self.layer(index)
-    }
-
-    pub fn current_layer_end(&self) -> usize {
-        self.layer_ends[self.layer_count as usize] as usize
-    }
-
-    pub fn push_to_current_layer(&mut self, id: BuildNodeId) {
-        let end_index = self.layer_count as usize;
-        let pos = self.layer_ends[end_index] as usize;
-        self.layer_ids[pos] = id;
-        self.layer_ends[end_index] += 1;
-    }
-
-    pub fn start_new_layer(&mut self) {
-        let next = self.layer_count as usize + 1;
-        self.layer_ends[next] = self.layer_ends[self.layer_count as usize];
-        self.layer_count += 1;
-    }
-
-    pub fn pop_layer(&mut self) {
-        if self.layer_count > 1 {
-            self.layer_count -= 1;
-            self.layer_ends[self.layer_count as usize + 1] =
-                self.layer_ends[self.layer_count as usize];
+    pub fn precompute_literal_columns(&mut self, batch: SignBatch<'_>) {
+        let batch_size = self.batch_size;
+        for feature_index in 0..self.feature_count {
+            let column = batch.column(feature_index).expect("validated batch");
+            let positive_start = feature_index * 2 * batch_size;
+            let negative_start = positive_start + batch_size;
+            self.literal_columns[positive_start..positive_start + batch_size]
+                .copy_from_slice(column);
+            for row in 0..batch_size {
+                self.literal_columns[negative_start + row] = !column[row];
+            }
         }
     }
 }
@@ -301,12 +185,12 @@ pub(crate) struct EnsembleWorkspace {
     pub function_values: Box<[bool]>,
     pub pending_features: Box<[bool]>,
     pub pending_function_values: Box<[bool]>,
-    pub eval_scratch: Box<[bool]>,
     pub logits: Box<[f32]>,
     pub batch_features: Box<[bool]>,
     pub batch_signs: Box<[bool]>,
+    pub batch_signs_inverted: Box<[bool]>,
     pub batch_len: usize,
-    pub build: BuildWorkspace,
+    pub build: ConjunctionBuildWorkspace,
 }
 
 impl EnsembleWorkspace {
@@ -315,18 +199,17 @@ impl EnsembleWorkspace {
         let d = capacity.source_feature_count;
         let b = capacity.batch_size;
         let k_max = capacity.max_functions;
-        let n_max = capacity.max_expert_nodes;
         let c = capacity.n_classes.max(1);
         Ok(Self {
             function_values: vec![false; k_max].into_boxed_slice(),
             pending_features: vec![false; d].into_boxed_slice(),
             pending_function_values: vec![false; k_max].into_boxed_slice(),
-            eval_scratch: vec![false; n_max].into_boxed_slice(),
             logits: vec![0.0; c].into_boxed_slice(),
             batch_features: vec![false; b * d].into_boxed_slice(),
             batch_signs: vec![false; b].into_boxed_slice(),
+            batch_signs_inverted: vec![false; b].into_boxed_slice(),
             batch_len: 0,
-            build: BuildWorkspace::new(capacity),
+            build: ConjunctionBuildWorkspace::new(capacity),
         })
     }
 }

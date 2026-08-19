@@ -8,8 +8,8 @@
         "l2": 0.001,
         "batch_size": 1,
         "sgd_steps": 30,
-        "parent_top_k": 4,
-        "l_pat": 3,
+        "max_conjunctions": 4,
+        "stale_layers": 3,
         "max_functions": 96
       }
     },

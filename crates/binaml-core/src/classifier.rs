@@ -8,7 +8,7 @@ pub enum BClassifierError {
     PendingPrediction,
     NoPendingPrediction,
     Build,
-    Compact,
+    Expert,
 }
 
 impl From<EnsembleError> for BClassifierError {
@@ -19,12 +19,12 @@ impl From<EnsembleError> for BClassifierError {
             EnsembleError::PendingPrediction => Self::PendingPrediction,
             EnsembleError::NoPendingPrediction => Self::NoPendingPrediction,
             EnsembleError::Build => Self::Build,
-            EnsembleError::Compact => Self::Compact,
+            EnsembleError::Expert => Self::Expert,
         }
     }
 }
 
-/// Online multiclass classification over batch-learned boolean functions.
+/// Online multiclass classification over batch-learned conjunction experts.
 #[derive(Debug)]
 pub struct BClassifier {
     ensemble: BooleanEnsemble<ClassificationHead>,
@@ -57,10 +57,11 @@ impl BClassifier {
         l2: f32,
         batch_size: usize,
         sgd_steps: usize,
-        parent_top_k: usize,
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
         max_functions: usize,
-        max_expert_nodes: usize,
-        l_pat: usize,
+        max_experts: usize,
+        stale_layers: usize,
     ) -> Result<Self, BClassifierError> {
         Self::new(
             source_feature_count,
@@ -70,10 +71,11 @@ impl BClassifier {
                 l2,
                 sgd_steps,
                 batch_size,
-                parent_top_k,
+                max_conjunctions,
+                max_conjunction_length,
                 max_functions,
-                max_expert_nodes,
-                l_pat,
+                max_experts,
+                stale_layers,
             },
         )
     }
@@ -125,7 +127,7 @@ mod tests {
     use super::BClassifier;
 
     fn model(batch_size: usize, max_functions: usize) -> BClassifier {
-        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 8, max_functions, 64, 2)
+        BClassifier::with_hyperparameters(2, 3, 0.1, 0.0, batch_size, 1, 8, 7, max_functions, 64, 2)
             .unwrap()
     }
 

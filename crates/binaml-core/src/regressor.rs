@@ -7,7 +7,7 @@ pub enum BRegressorError {
     PendingPrediction,
     NoPendingPrediction,
     Build,
-    Compact,
+    Expert,
 }
 
 impl From<EnsembleError> for BRegressorError {
@@ -18,12 +18,12 @@ impl From<EnsembleError> for BRegressorError {
             EnsembleError::PendingPrediction => Self::PendingPrediction,
             EnsembleError::NoPendingPrediction => Self::NoPendingPrediction,
             EnsembleError::Build => Self::Build,
-            EnsembleError::Compact => Self::Compact,
+            EnsembleError::Expert => Self::Expert,
         }
     }
 }
 
-/// Online regression over an ensemble of batch-learned boolean functions.
+/// Online regression over an ensemble of batch-learned conjunction experts.
 #[derive(Debug)]
 pub struct BRegressor {
     ensemble: BooleanEnsemble<RegressionHead>,
@@ -51,10 +51,11 @@ impl BRegressor {
         l2: f32,
         batch_size: usize,
         sgd_steps: usize,
-        parent_top_k: usize,
+        max_conjunctions: usize,
+        max_conjunction_length: usize,
         max_functions: usize,
-        max_expert_nodes: usize,
-        l_pat: usize,
+        max_experts: usize,
+        stale_layers: usize,
     ) -> Result<Self, BRegressorError> {
         Self::new(
             source_feature_count,
@@ -63,10 +64,11 @@ impl BRegressor {
                 l2,
                 sgd_steps,
                 batch_size,
-                parent_top_k,
+                max_conjunctions,
+                max_conjunction_length,
                 max_functions,
-                max_expert_nodes,
-                l_pat,
+                max_experts,
+                stale_layers,
             },
         )
     }
@@ -116,7 +118,7 @@ mod tests {
     use super::BRegressor;
 
     fn model(batch_size: usize, max_functions: usize) -> BRegressor {
-        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 8, max_functions, 64, 2)
+        BRegressor::with_hyperparameters(2, 0.1, 0.0, batch_size, 1, 8, 7, max_functions, 64, 2)
             .unwrap()
     }
 
@@ -183,4 +185,5 @@ mod tests {
         );
         model.update(-1.0).unwrap();
     }
+
 }

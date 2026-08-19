@@ -129,11 +129,11 @@ def test_feature_regressor_repeats_replay_batch_updates() -> None:
     assert model.intercept == pytest.approx(0.19)
 
 
-def test_b_regressor_learns_negated_literal_via_output_inversion() -> None:
+def test_b_regressor_learns_negated_literal_via_literal_polarity() -> None:
     model = BRegressor(
         1,
         batch_size=8,
-        parent_top_k=2,
+        max_conjunctions=2,
         max_functions=4,
         sgd_steps=1,
     )
