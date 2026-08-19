@@ -32,13 +32,18 @@
         "alpha": 0.001,
         "batch_size": 1,
         "hidden_layer_sizes": [
-          100,
-          100
+          32,
+          32
         ],
         "learning_rate": 0.03,
         "random_state": 0,
-        "sgd_steps": 6
+        "sgd_steps": 24
       }
+    },
+    {
+      "factory": "binaml.models:LastTargetRegressor",
+      "name": "LastTargetRegressor",
+      "parameters": {}
     }
   ]
 }

@@ -29,17 +29,22 @@
       "factory": "binaml.models:MLPClassifier",
       "name": "MLPClassifier",
       "parameters": {
-        "alpha": 0.00015,
+        "alpha": 0.0,
         "batch_size": 1,
         "hidden_layer_sizes": [
           50,
           32,
           16
         ],
-        "learning_rate": 0.012,
+        "learning_rate": 0.015,
         "random_state": 0,
         "sgd_steps": 8
       }
+    },
+    {
+      "factory": "binaml.models:LastTargetClassifier",
+      "name": "LastTargetClassifier",
+      "parameters": {}
     }
   ]
 }

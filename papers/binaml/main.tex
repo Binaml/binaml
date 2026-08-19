@@ -514,6 +514,13 @@ $\{0,1,2,3,4\}$ with 32 input bits,
 random constant bit), noise standard deviation $0.1$, and the same
 function, DAG, and target-scale settings.  Input, gate, and intercept
 distributions each resample independently with probability $0.01$.
+Scenario \texttt{default.json} uses ten components; the lighter
+\texttt{single\_function.json} variant uses one component sampled as a single
+monomial (one conjunction of one to 32 literals, plus a random constant bit);
+\texttt{single\_function\_high\_arity.json} uses one component sampled as a
+single monomial with three to seven literals.  Scenario
+\texttt{default\_no\_drift.json} matches the default regression setup with
+drift probabilities set to zero.
 
 All models receive the scenario width.  \texttt{BRegressor} uses learning rate
 $\eta=1.5\times10^{-2}$, $\ell_2$ decay $2\times10^{-3}$, expert batch size
@@ -523,9 +530,11 @@ enters the linear head as $\hat{f}_k(x)\in\{0,1\}$.  The linear baseline is a
 JAX replay-batch implementation using learning rate $0.02$, decay
 $7.5\times10^{-3}$, replay size $B=1$, four full-batch SGD steps, and uncentered binary
 inputs.  The MLP baseline is a JAX two-layer ReLU network using replay size
-$B=1$ and six full-batch SGD steps; hidden layers of 100 and 100 units;
+$B=1$ and twenty-four full-batch SGD steps; hidden layers of 32 and 32 units;
 constant learning rate $0.03$, $\alpha=10^{-3}$, and random state zero.  Linear
-and MLP baselines share the same float32 replay SGD scaffold.
+and MLP baselines share the same float32 replay SGD scaffold.  The last-target
+baseline predicts zero on the first observation and thereafter repeats the most
+recently observed target, ignoring the input features.
 
 Tables report the mean $\pm$ standard error over five seeds.  MSE is the
 optimized loss; RMSE expresses the same error in target units.  Total time is
@@ -539,7 +548,62 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 BRegressor (ours) & $0.174\pm0.014$ & $0.416\pm0.017$ & $\boldsymbol{0.032\pm0.000}$ \\
 Linear SGD (JAX) & $\boldsymbol{0.156\pm0.012}$ & $\boldsymbol{0.394\pm0.016}$ & $1.375\pm0.021$ \\
-MLP SGD (JAX) & $0.170\pm0.013$ & $0.411\pm0.016$ & $2.685\pm0.225$ \\
+MLP SGD (JAX) & $0.165\pm0.012$ & $0.406\pm0.015$ & $1.961\pm0.100$ \\
+Last target & $0.159\pm0.014$ & $0.397\pm0.019$ & $0.102\pm0.026$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The no-drift variant in \texttt{benchmarks/scenarios/default\_no\_drift.json}
+uses the same settings as \texttt{default.json} with
+$p_x=p_g=p_b=0$.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrr}
+\hline
+\textbf{Model} & MSE & RMSE & total s \\
+\hline
+BRegressor (ours) & $0.172\pm0.017$ & $0.413\pm0.021$ & $\boldsymbol{0.056\pm0.014}$ \\
+Linear SGD (JAX) & $\boldsymbol{0.152\pm0.015}$ & $\boldsymbol{0.388\pm0.019}$ & $3.038\pm0.326$ \\
+MLP SGD (JAX) & $0.166\pm0.017$ & $0.405\pm0.021$ & $4.375\pm0.155$ \\
+Last target & $0.161\pm0.022$ & $0.397\pm0.027$ & $0.034\pm0.001$ \\
+\hline
+\end{tabular}
+\end{center}
+
+A lighter variant in \texttt{benchmarks/scenarios/single\_function.json}
+uses the same settings with one fixed monomial $f_0$ instead of ten ANF
+components.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrr}
+\hline
+\textbf{Model} & MSE & RMSE & total s \\
+\hline
+BRegressor (ours) & $0.040\pm0.006$ & $0.199\pm0.013$ & $\boldsymbol{0.028\pm0.000}$ \\
+Linear SGD (JAX) & $0.034\pm0.004$ & $0.183\pm0.010$ & $1.008\pm0.051$ \\
+MLP SGD (JAX) & $0.042\pm0.004$ & $0.205\pm0.009$ & $2.038\pm0.059$ \\
+Last target & $\boldsymbol{0.032\pm0.003}$ & $\boldsymbol{0.178\pm0.008}$ & $0.102\pm0.023$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The high-arity variant in \texttt{benchmarks/scenarios/single\_function\_high\_arity.json}
+uses the same settings with one fixed monomial $f_0$ whose clause has three to
+seven literals.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrrr}
+\hline
+\textbf{Model} & MSE & RMSE & total s \\
+\hline
+BRegressor (ours) & $0.039\pm0.003$ & $0.197\pm0.008$ & $\boldsymbol{0.065\pm0.002}$ \\
+Linear SGD (JAX) & $0.032\pm0.002$ & $0.178\pm0.005$ & $1.699\pm0.148$ \\
+MLP SGD (JAX) & $0.040\pm0.002$ & $0.199\pm0.005$ & $3.426\pm0.192$ \\
+Last target & $\boldsymbol{0.030\pm0.001}$ & $\boldsymbol{0.172\pm0.004}$ & $0.095\pm0.020$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -552,6 +616,9 @@ intercepts.  Binary classification is the same generator with
 \texttt{n\_classes=2}; a dedicated scenario pins one $f_0$ and fixed
 class head weights.  Scenario and model entries are versioned in
 \texttt{benchmarks/scenarios/default\_multiclass.json},
+\texttt{benchmarks/scenarios/default\_multiclass\_no\_drift.json},
+\texttt{benchmarks/scenarios/single\_function\_multiclass.json},
+\texttt{benchmarks/scenarios/single\_function\_high\_arity\_multiclass.json},
 \texttt{benchmarks/scenarios/binary.json}, and
 \texttt{benchmarks/models\_classification.json}.  \texttt{BClassifier} uses
 learning rate $\eta=6\times10^{-2}$, $\ell_2$ decay $3\times10^{-3}$,
@@ -560,8 +627,9 @@ pattern length $\ell_{\mathrm{pat}}=4$,
 ensemble capacity $K_{\max}=40$, and $32$ expert nodes per function.  The linear classifier baseline uses
 learning rate $0.02$, replay size $B=1$, and eight SGD steps; the MLP classifier
 baseline uses three ReLU hidden layers of 50, 32, and 16 units, learning rate
-$0.012$, decay $1.5\times10^{-4}$, replay size $B=1$, and eight SGD steps, both with
-softmax cross-entropy.  Reported
+$0.015$, no weight decay, replay size $B=1$, and eight SGD steps, both with
+softmax cross-entropy.  The last-target baseline uses the same rule as in
+regression, predicting class zero initially.  Reported
 comparisons use prequential accuracy over the same seed set after optional
 warm-up exclusion.
 
@@ -578,7 +646,62 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 BClassifier (ours) & $\boldsymbol{0.808\pm0.012}$ & $\boldsymbol{0.077\pm0.018}$ \\
 Linear SGD (JAX) & $0.802\pm0.016$ & $1.007\pm0.096$ \\
-MLP SGD (JAX) & $0.805\pm0.010$ & $1.959\pm0.071$ \\
+MLP SGD (JAX) & $0.805\pm0.012$ & $2.118\pm0.112$ \\
+Last target & $0.808\pm0.011$ & $0.025\pm0.005$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The no-drift variant in
+\texttt{benchmarks/scenarios/default\_multiclass\_no\_drift.json} uses the
+same settings as \texttt{default\_multiclass.json} with $p_x=p_g=p_b=0$.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrr}
+\hline
+\textbf{Model} & accuracy & total s \\
+\hline
+BClassifier (ours) & $\boldsymbol{0.803\pm0.021}$ & $\boldsymbol{0.082\pm0.009}$ \\
+Linear SGD (JAX) & $0.800\pm0.024$ & $2.347\pm0.352$ \\
+MLP SGD (JAX) & $0.800\pm0.022$ & $3.477\pm0.202$ \\
+Last target & $0.802\pm0.024$ & $0.021\pm0.001$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The single-function variant in
+\texttt{benchmarks/scenarios/single\_function\_multiclass.json} uses one fixed
+monomial $f_0$ with the same multiclass head sampling as the default.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrr}
+\hline
+\textbf{Model} & accuracy & total s \\
+\hline
+BClassifier (ours) & $0.871\pm0.014$ & $\boldsymbol{0.043\pm0.000}$ \\
+Linear SGD (JAX) & $0.870\pm0.014$ & $0.927\pm0.008$ \\
+MLP SGD (JAX) & $\boldsymbol{0.871\pm0.013}$ & $2.121\pm0.062$ \\
+Last target & $\boldsymbol{0.871\pm0.013}$ & $0.044\pm0.011$ \\
+\hline
+\end{tabular}
+\end{center}
+
+The high-arity variant in
+\texttt{benchmarks/scenarios/single\_function\_high\_arity\_multiclass.json}
+uses one fixed monomial $f_0$ whose clause has three to seven literals.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lrr}
+\hline
+\textbf{Model} & accuracy & total s \\
+\hline
+BClassifier (ours) & $\boldsymbol{0.875\pm0.011}$ & $\boldsymbol{0.094\pm0.012}$ \\
+Linear SGD (JAX) & $0.871\pm0.012$ & $1.548\pm0.096$ \\
+MLP SGD (JAX) & $0.875\pm0.012$ & $2.912\pm0.136$ \\
+Last target & $\boldsymbol{0.876\pm0.011}$ & $0.034\pm0.007$ \\
 \hline
 \end{tabular}
 \end{center}

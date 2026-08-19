@@ -1,0 +1,29 @@
+{
+  "name": "single_function",
+  "n_samples": 1000,
+  "seeds": [0, 1, 2, 3, 4],
+  "environment": {
+    "n_features": 32,
+    "n_functions": 1,
+    "q_max": 2,
+    "p_min": 0.05,
+    "p_max": 0.95,
+    "p_x": 0.01,
+    "p_sample_min_x": 0.2,
+    "p_sample_max_x": 0.2,
+    "p_g": 0.01,
+    "p_sample_min_g": 0.2,
+    "p_sample_max_g": 0.2,
+    "min_n_terms": 1,
+    "max_n_terms": 1,
+    "min_term_degree": 1,
+    "max_term_degree": 32,
+    "p_negated_literal": 0.5,
+    "w_min": -1.0,
+    "w_max": 1.0,
+    "b_min": -1.0,
+    "b_max": 1.0,
+    "p_b": 0.01,
+    "noise_std": 0.1
+  }
+}

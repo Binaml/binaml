@@ -8,6 +8,7 @@ from binaml import (
     SGDLinearRegressor,
     __version__,
 )
+from binaml.models import LastTargetClassifier, LastTargetRegressor
 
 
 def test_package_version_matches_installed_distribution() -> None:
@@ -162,3 +163,23 @@ def test_mlp_replays_the_latest_batch_for_each_sgd_step() -> None:
 def test_mlp_rejects_unknown_kwargs() -> None:
     with pytest.raises(TypeError):
         MLPRegressor(1, momentum=0.9)
+
+
+def test_last_target_regressor_starts_at_zero_then_repeats_target() -> None:
+    model = LastTargetRegressor(2)
+
+    assert model.predict(np.array([1, 0], dtype=np.uint8)) == 0.0
+    model.update(1.5)
+    assert model.predict(np.array([0, 1], dtype=np.uint8)) == 1.5
+    model.update(-0.25)
+    assert model.predict(np.array([1, 1], dtype=np.uint8)) == -0.25
+
+
+def test_last_target_classifier_starts_at_zero_then_repeats_label() -> None:
+    model = LastTargetClassifier(2, n_classes=3)
+
+    assert model.predict(np.array([1, 0], dtype=np.uint8)) == 0
+    model.update(2)
+    assert model.predict(np.array([0, 1], dtype=np.uint8)) == 2
+    model.update(1)
+    assert model.predict(np.array([1, 1], dtype=np.uint8)) == 1
