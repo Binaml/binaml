@@ -22,7 +22,7 @@ from .boolean_dgp import (
     sample_function,
 )
 
-GENERATOR_VERSION = "5.0.0-numpy-pcg64dxsm-clause"
+GENERATOR_VERSION = "7.0.0-numpy-pcg64dxsm-clause"
 
 
 def _canonical_json(value: object) -> str:
@@ -203,7 +203,10 @@ class SyntheticDriftingRegressionStream(Iterator[tuple[np.ndarray, float]]):
         gate_state = self.gate_state.copy()
         intercept = self.intercept
         latent = intercept + float(
-            sum(weight * gate * function.evaluate(x) for weight, gate, function in zip(self.weights, gate_state, self.functions, strict=True))
+            sum(
+                weight * gate * function.evaluate(x)
+                for weight, gate, function in zip(self.weights, gate_state, self.functions, strict=True)
+            )
         )
         noise = float(self._noise_rng.normal(0, self.config.noise_std))
         input_distribution_sampled = bool(self._input_drift_rng.random() < self.config.p_x)

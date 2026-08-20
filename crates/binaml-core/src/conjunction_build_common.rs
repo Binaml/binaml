@@ -317,7 +317,8 @@ pub(crate) fn pick_winner(beam: &[BeamEntry], beam_len: usize) -> BeamEntry {
 #[cfg(test)]
 mod tests {
     use super::{
-        dedup_extensions, score_column, ConjunctionBuildConfig, ConjunctionKey, ExtensionCandidate,
+        dedup_extensions, pick_winner, score_column, BeamEntry, ConjunctionBuildConfig,
+        ConjunctionKey, ExtensionCandidate,
     };
     use crate::association::association_score;
 
@@ -389,5 +390,24 @@ mod tests {
         let capacity = super::derive_conjunction_capacity(32, config);
         assert_eq!(capacity.max_extensions, 4 * 2 * 32);
         assert_eq!(capacity.key_words, 1);
+    }
+
+    #[test]
+    fn pick_winner_uses_accuracy_then_association() {
+        let high_accuracy = BeamEntry {
+            key: ConjunctionKey::EMPTY.with_literal(0, false, 1).unwrap(),
+            abs_assoc: 1,
+            accuracy: 4,
+            column_slot: 0,
+        };
+        let high_assoc = BeamEntry {
+            key: ConjunctionKey::EMPTY.with_literal(1, false, 1).unwrap(),
+            abs_assoc: 5,
+            accuracy: 2,
+            column_slot: 1,
+        };
+        let beam = [high_accuracy, high_assoc];
+        assert_eq!(pick_winner(&beam, 2).column_slot, 0);
+        assert_eq!(pick_winner(&beam, 2).accuracy, 4);
     }
 }

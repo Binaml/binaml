@@ -23,7 +23,7 @@ from .boolean_dgp import (
 )
 from .synthetic_drifting_regression import _canonical_json, _jsonify
 
-GENERATOR_VERSION = "6.0.0-numpy-pcg64dxsm-clause"
+GENERATOR_VERSION = "8.0.0-numpy-pcg64dxsm-clause"
 
 
 @dataclass(frozen=True)

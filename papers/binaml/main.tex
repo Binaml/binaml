@@ -158,8 +158,7 @@ b
 w_k\,f_k(x_t),
 \]
 where $b\in\mathbb R$, each $w_k\in\mathbb R$, and each
-$f_k(x_t)\in\{0,1\}$.
-Each $f_k$ is a compact conjunction expert built from one supervision batch.
+$f_k(x_t)\in\{0,1\}$ is a boolean conjunction expert built from one supervision batch.
 Expert construction consumes a binary supervision bit derived from the scalar
 target.  With pre-update prediction $\hat y_t$, the residual is
 $e_t=y_t-\hat y_t$ and the label appended to the current expert batch is
@@ -193,7 +192,8 @@ b_c
 \sum_{k=1}^{F_t}
 w_{k,c}\,f_k(x_t),
 \]
-where $b_c\in\mathbb R$ and each $w_{k,c}\in\mathbb R$.  The predicted class
+where $b_c\in\mathbb R$, each $w_{k,c}\in\mathbb R$, and each
+$f_k(x_t)\in\{0,1\}$.  The predicted class
 is $\hat c_t=\operatorname*{argmax}_c \ell_{t,c}$, with ties broken toward the
 smallest index.
 Expert construction consumes a binary supervision bit derived from the class label.
@@ -249,8 +249,9 @@ across batches.
 \subsection{Conjunction evaluation}
 A stored \texttt{ConjunctionExpert} lists up to $\ell_{\max}$ signed literals
 in sorted feature order.  Evaluation is a single pass: $f_k(x)=1$ iff every
-positive literal sees a one and every negated literal sees a zero.  One forward
-pass evaluates $f_k(x)$ for prediction and SGD.
+positive literal sees a one and every negated literal sees a zero.  The linear
+head uses this indicator directly.  One forward pass evaluates $f_k(x)$ for
+prediction and SGD.
 
 \subsection{Supervision and batching}
 Batching amortizes conjunction search over $B$ supervision bits.  Batch $n$ is
@@ -261,7 +262,9 @@ Batching amortizes conjunction search over $B$ supervision bits.  Batch $n$ is
 \qquad |I_n|=B,
 \]
 where $I_n$ is the contiguous block of $B$ observations since the previous
-structural update.  Processing $\mathcal B_n$ runs the beam search, selects
+structural update.  If $\sum_{t\in I_n}s_t>B/2$, replace each $s_t$ by
+$1-s_t$ so the positive class is the minority before search.  Processing
+$\mathcal B_n$ runs the beam search, selects
 one conjunction by in-sample accuracy, appends $(f,w=0)$ to the ensemble, and
 prunes to $K_{\max}$ if needed.
 
@@ -471,7 +474,7 @@ benchmark directory.
 \subsection{Regression}
 The regression task uses 1,000 observations and seeds
 $\{0,1,2,3,4\}$ with 32 input bits,
-10 fixed target components $f_k(x)$ sampled as conjunctions of one to 32
+10 fixed target components $f_k(x)\in\{0,1\}$ sampled as conjunctions of one to 32
 literals each, noise standard deviation $0.1$, and the same
 function, DAG, and target-scale settings.  Input bits are resampled from the
 input DAG every step ($p_{\mathrm{sample},x}=1$); gate bits use partial
@@ -510,10 +513,10 @@ the prequential predict-plus-update time for a 1,000-sample trajectory.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.076\pm0.016$ & $0.268\pm0.032$ & $0.076\pm0.001$ \\
-Linear SGD (JAX) & $0.068\pm0.012$ & $0.256\pm0.026$ & $1.336\pm0.009$ \\
-MLP SGD (JAX) & $0.069\pm0.014$ & $0.255\pm0.030$ & $2.303\pm0.077$ \\
-Last target & $0.078\pm0.020$ & $0.270\pm0.037$ & $0.019\pm0.000$ \\
+BRegressor (ours) & $0.534\pm0.100$ & $0.713\pm0.081$ & $0.042\pm0.001$ \\
+Linear SGD (JAX) & $0.565\pm0.089$ & $0.738\pm0.070$ & $1.336\pm0.009$ \\
+MLP SGD (JAX) & $0.423\pm0.081$ & $0.634\pm0.073$ & $2.303\pm0.077$ \\
+Last target & $0.456\pm0.098$ & $0.655\pm0.083$ & $0.019\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -528,10 +531,10 @@ $p_x=p_g=p_b=0$ and fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.056\pm0.018$ & $0.223\pm0.040$ & $0.076\pm0.002$ \\
-Linear SGD (JAX) & $0.033\pm0.009$ & $0.176\pm0.026$ & $1.235\pm0.021$ \\
-MLP SGD (JAX) & $0.052\pm0.015$ & $0.217\pm0.035$ & $2.503\pm0.054$ \\
-Last target & $0.077\pm0.029$ & $0.255\pm0.054$ & $0.019\pm0.001$ \\
+BRegressor (ours) & $0.164\pm0.067$ & $0.357\pm0.096$ & $0.043\pm0.002$ \\
+Linear SGD (JAX) & $0.110\pm0.047$ & $0.294\pm0.077$ & $1.235\pm0.021$ \\
+MLP SGD (JAX) & $0.149\pm0.062$ & $0.341\pm0.090$ & $2.503\pm0.054$ \\
+Last target & $0.248\pm0.114$ & $0.425\pm0.130$ & $0.019\pm0.001$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -546,10 +549,10 @@ components.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.041\pm0.006$ & $0.201\pm0.014$ & $0.072\pm0.003$ \\
-Linear SGD (JAX) & $0.050\pm0.007$ & $0.220\pm0.017$ & $1.232\pm0.036$ \\
-MLP SGD (JAX) & $0.034\pm0.006$ & $0.183\pm0.014$ & $2.471\pm0.027$ \\
-Last target & $0.034\pm0.006$ & $0.181\pm0.016$ & $0.018\pm0.000$ \\
+BRegressor (ours) & $0.097\pm0.031$ & $0.295\pm0.049$ & $0.043\pm0.000$ \\
+Linear SGD (JAX) & $0.111\pm0.028$ & $0.321\pm0.045$ & $1.232\pm0.036$ \\
+MLP SGD (JAX) & $0.081\pm0.027$ & $0.271\pm0.045$ & $2.471\pm0.027$ \\
+Last target & $0.083\pm0.031$ & $0.270\pm0.050$ & $0.018\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -564,10 +567,10 @@ seven literals.
 \hline
 \textbf{Model} & MSE & RMSE & total s \\
 \hline
-BRegressor (ours) & $0.047\pm0.006$ & $0.215\pm0.015$ & $0.065\pm0.002$ \\
-Linear SGD (JAX) & $0.055\pm0.006$ & $0.234\pm0.012$ & $1.183\pm0.020$ \\
-MLP SGD (JAX) & $0.040\pm0.004$ & $0.199\pm0.011$ & $2.536\pm0.054$ \\
-Last target & $0.040\pm0.005$ & $0.197\pm0.012$ & $0.018\pm0.000$ \\
+BRegressor (ours) & $0.133\pm0.030$ & $0.354\pm0.043$ & $0.042\pm0.001$ \\
+Linear SGD (JAX) & $0.144\pm0.030$ & $0.371\pm0.041$ & $1.183\pm0.020$ \\
+MLP SGD (JAX) & $0.109\pm0.026$ & $0.321\pm0.040$ & $2.536\pm0.054$ \\
+Last target & $0.113\pm0.028$ & $0.324\pm0.043$ & $0.018\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -608,10 +611,10 @@ observations.  Total time is the prequential predict-plus-update time for a
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.621\pm0.026$ & $0.096\pm0.001$ \\
-Linear SGD (JAX) & $0.652\pm0.022$ & $1.561\pm0.168$ \\
-MLP SGD (JAX) & $0.646\pm0.020$ & $1.967\pm0.067$ \\
-Last target & $0.623\pm0.026$ & $0.014\pm0.000$ \\
+BClassifier (ours) & $0.591\pm0.036$ & $0.059\pm0.000$ \\
+Linear SGD (JAX) & $0.512\pm0.021$ & $1.561\pm0.168$ \\
+MLP SGD (JAX) & $0.602\pm0.025$ & $1.967\pm0.067$ \\
+Last target & $0.641\pm0.030$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -627,10 +630,10 @@ fixed gate bits (no gate resampling).
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.625\pm0.132$ & $0.088\pm0.003$ \\
-Linear SGD (JAX) & $0.741\pm0.102$ & $1.015\pm0.016$ \\
-MLP SGD (JAX) & $0.688\pm0.115$ & $2.073\pm0.031$ \\
-Last target & $0.590\pm0.142$ & $0.014\pm0.000$ \\
+BClassifier (ours) & $0.925\pm0.058$ & $0.054\pm0.004$ \\
+Linear SGD (JAX) & $0.951\pm0.037$ & $1.015\pm0.016$ \\
+MLP SGD (JAX) & $0.934\pm0.053$ & $2.073\pm0.031$ \\
+Last target & $0.919\pm0.058$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -645,10 +648,10 @@ conjunction $f_0$ with the same multiclass head sampling as the default.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.664\pm0.020$ & $0.087\pm0.001$ \\
-Linear SGD (JAX) & $0.676\pm0.022$ & $1.026\pm0.029$ \\
-MLP SGD (JAX) & $0.680\pm0.021$ & $2.057\pm0.039$ \\
-Last target & $0.668\pm0.022$ & $0.014\pm0.000$ \\
+BClassifier (ours) & $0.698\pm0.014$ & $0.058\pm0.001$ \\
+Linear SGD (JAX) & $0.652\pm0.016$ & $1.026\pm0.029$ \\
+MLP SGD (JAX) & $0.712\pm0.012$ & $2.057\pm0.039$ \\
+Last target & $0.721\pm0.013$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}
@@ -663,10 +666,10 @@ uses one fixed conjunction $f_0$ whose clause has three to seven literals.
 \hline
 \textbf{Model} & accuracy & total s \\
 \hline
-BClassifier (ours) & $0.648\pm0.023$ & $0.090\pm0.002$ \\
-Linear SGD (JAX) & $0.674\pm0.023$ & $1.065\pm0.016$ \\
-MLP SGD (JAX) & $0.676\pm0.022$ & $2.002\pm0.046$ \\
-Last target & $0.658\pm0.024$ & $0.014\pm0.000$ \\
+BClassifier (ours) & $0.668\pm0.005$ & $0.056\pm0.002$ \\
+Linear SGD (JAX) & $0.623\pm0.013$ & $1.065\pm0.016$ \\
+MLP SGD (JAX) & $0.704\pm0.009$ & $2.002\pm0.046$ \\
+Last target & $0.710\pm0.005$ & $0.014\pm0.000$ \\
 \hline
 \end{tabular}
 \end{center}

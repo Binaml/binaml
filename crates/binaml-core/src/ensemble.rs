@@ -210,13 +210,24 @@ impl<H: EnsembleHead> BooleanEnsemble<H> {
         let key_words = self.workspace.build.key_words;
         let max_conjunction_length = self.config.max_conjunction_length;
 
+        let ny = self.workspace.batch_signs[..batch_size]
+            .iter()
+            .filter(|sign| **sign)
+            .count();
+        let use_direct_signs = ny * 2 <= batch_size;
+        if !use_direct_signs {
+            for index in 0..batch_size {
+                self.workspace.batch_signs_inverted[index] = !self.workspace.batch_signs[index];
+            }
+        }
+
         let chosen = match self.try_build_expert(
             build_config,
             batch_size,
             feature_count,
             key_words,
             max_conjunction_length,
-            true,
+            use_direct_signs,
         )? {
             Some(candidate) => candidate,
             None => return Ok(()),

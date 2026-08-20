@@ -12,9 +12,9 @@ All notable changes to Binaml are documented here.
 - **Breaking:** replace fixed builder depth `max_layers` with
   `max_layers_without_improvement`, stopping graph growth after consecutive
   composed layers fail to improve in-sample accuracy.
-- **Breaking:** linear heads now use uncentered function activations $f_k(x)\in\{0,1\}$
-  instead of $2f_k(x)-1$. Default \texttt{BRegressor} and \texttt{BClassifier}
-  hyperparameters updated accordingly.
+- **Breaking:** linear heads and synthetic stream components now use indicator
+  activations $f_k(x)\in\{0,1\}$ instead of $2f_k(x)-1$. Default
+  `BRegressor` and `BClassifier` hyperparameters updated accordingly.
 
 ## [0.1.0-alpha.3] - 2026-08-16
 
