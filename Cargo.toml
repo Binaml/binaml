@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/binaml-core", "bindings/python"]
+members = ["crates/binaml-core", "crates/boolean-circuit-exp", "bindings/python"]
 resolver = "2"
 
 [workspace.package]
