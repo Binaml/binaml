@@ -53,9 +53,18 @@ pub fn min_total(act_a: i8, act_b: i8, weights: [i8; 4], target: i8) -> u8 {
         .unwrap_or(0)
 }
 
-/// Row index minimizing total cost.
-pub fn argmin_row(act_a: i8, act_b: i8, weights: [i8; 4], target: i8) -> u8 {
+/// Number of parent signs that must flip to realize row `s`.
+#[inline]
+pub fn sign_mismatches(s: u8, act_a: i8, act_b: i8) -> u8 {
+    let s_a = s >> 1;
+    let s_b = s & 1;
+    u8::from(sign(act_a) != s_a) + u8::from(sign(act_b) != s_b)
+}
+
+/// Row minimizing `total(s)` among rows reachable with at most one parent sign flip.
+pub fn best_row_at_most_one_flip(act_a: i8, act_b: i8, weights: [i8; 4], target: i8) -> u8 {
     (0..4u8)
+        .filter(|&s| sign_mismatches(s, act_a, act_b) <= 1)
         .min_by_key(|&s| row_total(s, act_a, act_b, weights, target))
         .unwrap_or(0)
 }

@@ -1,23 +1,12 @@
-//! `StreamLearner`: predict / observe with FixGate event queue.
+//! `StreamLearner`: predict / observe with FixGate backward propagation.
 
 use std::collections::VecDeque;
 
 use crate::circuit::FixedCircuit;
 use crate::gate::{
-    argmin_row, bool_target, get_weight, lane, min_total, nudge_weight, pole, row_weights,
-    set_weight,
+    best_row_at_most_one_flip, bool_target, get_weight, lane, nudge_weight, pole, row_weights,
+    set_weight, sign, sign_mismatches,
 };
-
-enum Event {
-    FixGate(usize),
-}
-
-#[derive(Clone, Copy)]
-enum Move {
-    Weight,
-    ParentA { pole_val: i8 },
-    ParentB { pole_val: i8 },
-}
 
 pub struct StreamLearner {
     d: usize,
@@ -30,7 +19,6 @@ pub struct StreamLearner {
     activations: Box<[i8]>,
     targets: Box<[i8]>,
     active_row: Box<[u8]>,
-    event_queue: VecDeque<Event>,
     t: u64,
 }
 
@@ -54,7 +42,6 @@ impl StreamLearner {
             activations: vec![0i8; n].into_boxed_slice(),
             targets: vec![0i8; n].into_boxed_slice(),
             active_row: vec![0u8; g].into_boxed_slice(),
-            event_queue: VecDeque::new(),
             t: 0,
         }
     }
@@ -83,20 +70,21 @@ impl StreamLearner {
         let sink = self.sink as usize;
         self.targets[sink] = bool_target(y);
 
-        self.event_queue.clear();
+        let mut pending = VecDeque::new();
         if self.activations[sink] != self.targets[sink] {
             let sg = self.gate_of_node[sink];
             if sg != 255 {
-                self.event_queue.push_back(Event::FixGate(sg as usize));
+                pending.push_back(sg as usize);
             }
         }
 
-        while let Some(Event::FixGate(g)) = self.event_queue.pop_front() {
-            self.fix_gate(g);
+        while let Some(g) = pending.pop_front() {
+            self.fix_gate(g, &mut pending);
         }
     }
 
-    fn fix_gate(&mut self, g: usize) {
+    /// Nudge `w[lane]` only when `lane` is the best ≤1-flip row; backprop via worklist.
+    fn fix_gate(&mut self, g: usize, pending: &mut VecDeque<usize>) {
         let node = self.d + g;
         let target = self.targets[node];
         if self.activations[node] == target {
@@ -109,121 +97,48 @@ impl StreamLearner {
         let act_a = self.activations[a];
         let act_b = self.activations[b];
         let weights = row_weights(self.weights[g]);
-        let w_lane = weights[lane_idx as usize];
 
-        let mut candidates = Vec::new();
-        if w_lane != target {
-            candidates.push(Move::Weight);
-        }
-        for sign_bit in [0u8, 1] {
-            let p = pole(sign_bit);
-            if a >= self.d && self.activations[a] != p {
-                candidates.push(Move::ParentA { pole_val: p });
-            }
-            if b >= self.d && self.activations[b] != p {
-                candidates.push(Move::ParentB { pole_val: p });
-            }
-        }
+        let s_star = best_row_at_most_one_flip(act_a, act_b, weights, target);
 
-        if candidates.is_empty() {
-            return;
-        }
-
-        let mut best: Option<(Move, u8, u8)> = None;
-        for &mv in &candidates {
-            let (cost, s_star) =
-                self.simulate_move(mv, target, lane_idx, act_a, act_b, weights, w_lane);
-            let replace = match best {
-                None => true,
-                Some((best_mv, best_cost, _)) => {
-                    cost < best_cost || (cost == best_cost && move_tie_break(mv, best_mv))
-                }
-            };
-            if replace {
-                best = Some((mv, cost, s_star));
-            }
-        }
-
-        let Some((mv, _, s_star)) = best else {
-            return;
-        };
-
-        match mv {
-            Move::Weight => {
+        if lane_idx == s_star {
+            let w_lane = weights[lane_idx as usize];
+            if w_lane != target {
                 set_weight(
                     &mut self.weights[g],
                     lane_idx,
                     nudge_weight(w_lane, target),
                 );
             }
-            Move::ParentA { .. } => {
-                let p = pole(s_star >> 1);
-                if self.activations[a] != p {
-                    self.targets[a] = p;
-                    self.maybe_enqueue_parent(a);
-                }
-            }
-            Move::ParentB { .. } => {
-                let p = pole(s_star & 1);
-                if self.activations[b] != p {
-                    self.targets[b] = p;
-                    self.maybe_enqueue_parent(b);
-                }
-            }
+        }
+
+        if sign_mismatches(s_star, act_a, act_b) != 1 {
+            return;
+        }
+
+        let s_a = s_star >> 1;
+        let s_b = s_star & 1;
+
+        if sign(act_a) != s_a && a >= self.d {
+            self.targets[a] = pole(s_a);
+            self.propagate_producer(a, pending);
+        } else if sign(act_b) != s_b && b >= self.d {
+            self.targets[b] = pole(s_b);
+            self.propagate_producer(b, pending);
         }
     }
 
-    fn simulate_move(
-        &self,
-        mv: Move,
-        target: i8,
-        lane_idx: u8,
-        act_a: i8,
-        act_b: i8,
-        mut weights: [i8; 4],
-        w_lane: i8,
-    ) -> (u8, u8) {
-        let (sim_a, sim_b) = match mv {
-            Move::Weight => {
-                weights[lane_idx as usize] = nudge_weight(w_lane, target);
-                (act_a, act_b)
-            }
-            Move::ParentA { pole_val } => (pole_val, act_b),
-            Move::ParentB { pole_val } => (act_a, pole_val),
-        };
-
-        let cost = min_total(sim_a, sim_b, weights, target);
-        let s_star = argmin_row(sim_a, sim_b, weights, target);
-        (cost, s_star)
-    }
-
-    fn maybe_enqueue_parent(&mut self, parent: usize) {
+    /// Enqueue upstream gate; duplicates allowed (multiple children may write same parent).
+    fn propagate_producer(&mut self, parent: usize, pending: &mut VecDeque<usize>) {
         if parent < self.d {
             return;
         }
         if self.activations[parent] != self.targets[parent] {
             let g = self.gate_of_node[parent] as usize;
             if g != 255 {
-                self.event_queue.push_back(Event::FixGate(g));
+                pending.push_back(g);
             }
         }
     }
-}
-
-/// Tie-break: weight > parent a > parent b; parent +127 > -128.
-fn move_tie_break(a: Move, b: Move) -> bool {
-    fn rank(m: Move) -> u8 {
-        match m {
-            Move::Weight => 0,
-            Move::ParentA { pole_val } => {
-                if pole_val > 0 { 1 } else { 2 }
-            }
-            Move::ParentB { pole_val } => {
-                if pole_val > 0 { 3 } else { 4 }
-            }
-        }
-    }
-    rank(a) < rank(b)
 }
 
 #[cfg(test)]

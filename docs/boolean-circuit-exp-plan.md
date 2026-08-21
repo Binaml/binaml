@@ -145,55 +145,35 @@ are equal, **no** weight change, **no** parent target write, **no** upstream eve
 
 | Event | Meaning |
 |-------|---------|
-| **`FixGate(g)`** | Output **`activation ≠ target`** — pick and apply one minimal-cost move. |
-| **`ParentFeedback(g, wire)`** | Set **`targets[parent]`** to **`+127`** or **`−128`** for the selected row sign. |
+| **`FixGate(g)`** | Output **`activation ≠ target`** — nudge **`w[lane]`**; optional single-parent pole. |
 
 **Pole targets:** **`pole(1) = +127`**, **`pole(0) = −128`** (max/min **`i8`**). Used when
 propagating to a parent so the child requests a **definite sign** with full confidence.
 Stream sink still uses **`±1`** from **`y`**.
 
 **`FixGate(g)`** — let **`n = d + g`**, **`T = targets[n]`**, **`act = activations[n]`**,
-**`lane = active_row[g]`**, parents **`a`, `b`**, activations **`act_a`, `act_b`**:
+**`lane = active_row[g]`**, parents **`a`, `b`**, activations **`act_a`, `act_b`**, weights **`w[0..4]`**:
 
 If **`act == T`**, return immediately (nothing to do).
 
-1. Compute **`total(s)`** for **`s ∈ {0..3}`** (cost model above).
-2. Evaluate **atomic** moves (skip any that would not change state):
-   - **`w[lane] ± 1`** — only if **`w[lane] ≠ T`** (gate output **`act`** equals **`w[lane]`**)
-   - **`targets[a] ← pole(0/1)`**, **`targets[b] ← pole(0/1)`** — only if
-     **`activations[parent] ≠ pole(...)`** for that candidate
-   
-   For each remaining move **`m`**, simulate post-move values (parent **activations**
-   unchanged this step; use updated **`w[lane]`** / **`targets[a/b]`** in **`flip_cost`**) and
-   compute **`best_after(m) = min_s total(s)`**. Let **`s*(m) = argmin_s total(s)`** after **`m`**.
-3. Pick **`m*`** with smallest **`best_after`**. Tie-break: weight **`> parent a` > parent b`**;
-   parent **`+127` > `−128`**; weight prefer **`+1`** over **`-1`**.
-4. Apply **`m*`**:
-   - **Weight:** saturating **`±1`** on packed **`w[lane]`** (toward **`T`**).
-   - **Parent pole:** **`pole = pole(s*_a)`** or **`pole(s*_b)`**; set **`targets[parent] = pole`**
-     only if **`activations[parent] ≠ pole`**. Enqueue **`ParentFeedback(g, wire)`**.
-5. After a parent pole write: if **`activations[parent] ≠ targets[parent]`** and **`parent`**
-   is not a source, push **`FixGate(producer(parent))`**.
+1. **`s* = argmin total(s)`** over rows with **`sign_mismatches(s) ≤ 1`**.
+2. **`w[lane] ± 1`** toward **`T`** only if **`lane == s*`** and **`w[lane] ≠ T`**.
+3. If **`sign_mismatches(s*) = 1`**, set **`targets[parent] ← pole(s*)`** on the one
+   mismatched internal parent and **enqueue `FixGate(producer(parent))`** on the observe
+   worklist (duplicates allowed — multiple children may update the same parent).
+4. Drain the worklist until empty so updates **propagate backward** through the graph each
+   **`observe`**, not only target writes.
 
-One **`FixGate`** applies **exactly one** change (one weight nudge **or** one parent pole
-write). Re-enqueue the same gate only via propagation — not in the same handler.
+Sources **`0..d-1`**: pole targets are not written.
 
-**`ParentFeedback`:** redundant if **`FixGate`** already wrote the target; kept for
-queue clarity when multiple children write the same parent (handled one-by-one; last
-write wins until the next event).
-
-Sources **`0..d-1`**: **`targets`** may change; no **`FixGate`** enqueued for them.
-
-**Not done:** joint multi-step moves, re-forward within the step, or full gradient
-through depth.
+**Not done:** re-forward within the step, two-parent flips in one handler, or full gradient.
 
 ```mermaid
 flowchart LR
   y[sink y to ±1] --> FG[FixGate sink]
-  FG --> S[score weight + pole moves]
-  S --> M[apply min-cost move]
-  M --> W[w lane ±1]
-  M --> P[targets parent = pole s*]
+  FG --> W["w[lane] ± 1"]
+  FG --> S["argmin total(s), ≤1 flip"]
+  S --> P[at most one parent pole]
   P --> FG2[FixGate upstream if mismatch]
   W --> done[done at this gate]
 ```
@@ -254,7 +234,11 @@ sink                                —
 
 ### Stream protocol
 
-For each `t = 1, 2, …`:
+**No concept drift:** one random DGP (fixed wiring + truth tables) is drawn at run
+start and held for all **`T`** steps. Inputs are i.i.d. **`Bernoulli(0.5)`** — the
+target function does not change over time.
+
+For each `t = 1, 2, …, T`:
 
 1. **`predict(x_t)`** — forward: **`i8` activations** + **`active_row`**.
 2. **`observe(y_t)`** — sink target **`±1`**; enqueue/propagate wherever
@@ -263,8 +247,10 @@ For each `t = 1, 2, …`:
 
 **Primary metrics:**
 
-- Prequential accuracy.
-- Steps to 95% cumulative accuracy.
+- **Accuracy after warmup:** fraction correct on steps **`warmup + 1 .. T`**
+  (default **`warmup = 16384`**, **`T = 65536`**). Excludes cold-start learning
+  from the reported accuracy.
+- Steps to 95% prequential cumulative accuracy (diagnostic; includes warmup).
 
 ## Topology modes
 
@@ -361,7 +347,7 @@ Higher-complexity circuits; longer streams.
 | `T` | 16k, 64k, 256k |
 | `n_seeds` | 50 |
 
-**Metrics:** final prequential accuracy, steps to 95%, mean `predict`/`observe` ns.
+**Metrics:** accuracy after warmup, steps to 95%, mean `predict`/`observe` ns.
 
 ### Experiment B — scaling depth and circuit size
 
@@ -395,7 +381,7 @@ cost tie-breaks before scaling.
 - Gates in **topological order**; parents **`u8`**, weights **`Box<[u32]>`**.
 - **`activations` / `targets`**: contiguous **`Box<[i8]>`** — **`2N`** bytes; no bitpack.
 - **`k = 2`**: one **`u32`** load; lane from two sign tests; output = selected **`i8`**.
-- **`FixGate` cost:** four rows × **`abs_diff`**; up to six moves (2 weight + 4 pole); unroll.
+- **`FixGate` cost:** four rows × **`abs_diff`** (filter **`sign_mismatches ≤ 1`**); one weight nudge + optional one parent pole.
 - Parent propagate: **`pole(s*_bit) ∈ {+127, −128}`** from **`argmin total(s)`** after move.
 - **`observe`:** growable **`EventQueue`**; parent **`i8`** targets may oscillate.
 - Saturating **`i8`** adds on weights and targets.
@@ -405,7 +391,7 @@ cost tie-breaks before scaling.
 
 `matched` topology, `d ≤ 32`, `depth ≤ 4`, `T ≥ 4096`:
 
-- Final prequential accuracy **> 95%** for a majority of seeds, **or**
+- Final accuracy after warmup **> 95%** for a majority of seeds, **or**
 - Clear gap over `independent` and over zero-init weights.
 
 A single **`k = 2`** gate passes **`i8`** confidence through row weights; **sign** of
@@ -425,3 +411,5 @@ deep compositions must build non-linear structure (e.g. XOR chains).
 
 - [sparse-linear-gate-sizing.md](./sparse-linear-gate-sizing.md) — fan-in comparison;
   **`k = 2`** vs **`k = 4`** and padding/load tradeoffs.
+- [boolean-circuit-exp-wire-learner-plan.md](./boolean-circuit-exp-wire-learner-plan.md) —
+  v2 per-wire learner and Experiment C (v1 vs v2 comparison).
